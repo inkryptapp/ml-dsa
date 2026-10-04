@@ -20,7 +20,8 @@
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bench": "vitest run --config vitest.bench.config.ts"
   },
   "devDependencies": {
     "@noble/post-quantum": "0.7.1",
