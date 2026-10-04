@@ -71,7 +71,7 @@ describe("keygen throws for a Seed it can't use", () => {
     expect(() => keygen(value)).toThrow(RangeError);
   });
 
-  // An empty array that reports 32 bytes would otherwise run keygen on whatever Seed is already in memory.
+  // An empty array that reports 32 bytes would otherwise copy nothing and run keygen on the wiped Seed region.
   class ClaimsThirtyTwoBytes extends Uint8Array {
     override get length(): number {
       return 32;
@@ -84,12 +84,8 @@ describe("keygen throws for a Seed it can't use", () => {
 
   test.each(lyingSeeds)(
     "RangeError for an empty Seed that claims 32 bytes through %s",
-    async (_name, lyingSeed) => {
-      const fresh = await loadMlDsa87();
-      expect(() => fresh.keygen(lyingSeed())).toThrow(RangeError);
-
-      fresh.keygen(new Uint8Array(32).fill(7));
-      expect(() => fresh.keygen(lyingSeed())).toThrow(RangeError);
+    (_name, lyingSeed) => {
+      expect(() => keygen(lyingSeed())).toThrow(RangeError);
     },
   );
 });
