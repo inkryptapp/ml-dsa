@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { loadMlDsa87 } from "../src/index.js";
 import { acvp, bytes } from "./acvp.js";
+import composite from "./vectors/composite-mldsa87-p384.json" with { type: "json" };
 
 const mlDsa = await loadMlDsa87();
 
@@ -65,22 +64,20 @@ const Composite = z.object({
   }),
 });
 
-const draft = Composite.parse(
-  JSON.parse(readFileSync(new URL("./vectors/composite-mldsa87-p384.json", import.meta.url), "utf8")),
-);
-const base64 = (text: string) => new Uint8Array(Buffer.from(text, "base64"));
-const ascii = (text: string) => new Uint8Array(Buffer.from(text, "ascii"));
+const draft = Composite.parse(composite);
+const base64 = (text: string) => Uint8Array.from(atob(text), (char) => char.charCodeAt(0));
+const ascii = (text: string) => new TextEncoder().encode(text);
 const label = ascii("COMPSIG-MLDSA87-ECDSA-P384-SHA512");
 
 /** The draft's message representative: M' = Prefix || Label || len(ctx) || ctx || SHA-512(M). */
-function representative(message: Uint8Array, context: Uint8Array): Uint8Array {
-  return Buffer.concat([
-    ascii("CompositeAlgorithmSignatures2025"),
-    label,
-    Uint8Array.of(context.length),
-    context,
-    createHash("sha512").update(message).digest(),
-  ]);
+async function representative(message: Uint8Array<ArrayBuffer>, context: Uint8Array): Promise<Uint8Array> {
+  return Uint8Array.of(
+    ...ascii("CompositeAlgorithmSignatures2025"),
+    ...label,
+    context.length,
+    ...context,
+    ...new Uint8Array(await crypto.subtle.digest("SHA-512", message)),
+  );
 }
 
 describe("draft-ietf-lamps-pq-composite-sigs-19, id-MLDSA87-ECDSA-P384-SHA512", () => {
@@ -92,18 +89,15 @@ describe("draft-ietf-lamps-pq-composite-sigs-19, id-MLDSA87-ECDSA-P384-SHA512", 
   test.each([
     ["the empty ctx", draft.test.s, new Uint8Array(0)],
     ["the draft's ctx", draft.test.sWithContext, context],
-  ])("the ML-DSA half of the signature under %s verifies under the Label", (_name, s, ctx) => {
+  ])("the ML-DSA half of the signature under %s verifies under the Label", async (_name, s, ctx) => {
     const signature = base64(s).subarray(0, 4627);
+    const signed = await representative(message, ctx);
+    const altered = await representative(Uint8Array.of(...message, 0), ctx);
 
     expect([
-      mlDsa.verify({ publicKey, message: representative(message, ctx), context: label, signature }),
-      mlDsa.verify({ publicKey, message: representative(message, ctx), signature }),
-      mlDsa.verify({
-        publicKey,
-        message: representative(Uint8Array.of(...message, 0), ctx),
-        context: label,
-        signature,
-      }),
+      mlDsa.verify({ publicKey, message: signed, context: label, signature }),
+      mlDsa.verify({ publicKey, message: signed, signature }),
+      mlDsa.verify({ publicKey, message: altered, context: label, signature }),
     ]).toEqual([true, false, false]);
   });
 });

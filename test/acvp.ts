@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import { z } from "zod";
+import capture from "./vectors/acvp-ml-dsa-87.json" with { type: "json" };
 
 const Hex = z.string().regex(/^(?:[0-9A-F]{2})*$/, "upper-case hex of whole bytes, as ACVP writes it");
 
@@ -73,9 +73,12 @@ const Capture = z.object({
   }),
 });
 
-export const acvp = Capture.parse(
-  JSON.parse(readFileSync(new URL("./vectors/acvp-ml-dsa-87.json", import.meta.url), "utf8")),
-);
+export const acvp = Capture.parse(capture);
 
-export const bytes = (hex: string): Uint8Array => new Uint8Array(Buffer.from(hex, "hex"));
-export const upperHex = (value: Uint8Array): string => Buffer.from(value).toString("hex").toUpperCase();
+// Hex by hand rather than through `Buffer`, so the tests also run in browsers.
+export const bytes = (hex: string): Uint8Array =>
+  Uint8Array.from(hex.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
+export const upperHex = (value: Uint8Array): string =>
+  Array.from(value, (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .toUpperCase();

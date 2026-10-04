@@ -26,7 +26,7 @@ function wrongTypes(args: Record<string, Uint8Array>): TypeCase[] {
     const cases: TypeCase[] = [
       [field, "undefined", undefined],
       [field, "null", null],
-      [field, "a string", Buffer.from(value).toString("latin1")],
+      [field, "a string", String.fromCharCode(...value)],
       [field, "an ArrayBuffer", value.slice().buffer],
       [field, "a plain array", Array.from(value)],
       [field, "an Int8Array", new Int8Array(value)],

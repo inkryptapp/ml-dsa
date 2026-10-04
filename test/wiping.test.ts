@@ -7,13 +7,23 @@ const PAINT = 0xa5;
 /** Random bytes, so that finding them in memory can only mean a copy was left there. */
 const randomBytes = (length: number) => crypto.getRandomValues(new Uint8Array(length));
 
+/** One character per byte, so a byte search is a string search, which every runtime does natively. */
+function latin1(bytes: Uint8Array): string {
+  const chunk = 8192;
+  let text = "";
+  for (let at = 0; at < bytes.length; at += chunk) {
+    text += String.fromCharCode(...bytes.subarray(at, at + chunk));
+  }
+  return text;
+}
+
 /**
  * Which of the secrets are still in memory, searched for across the whole memory rather than in the regions the
  * package means to use. The Secret key is searched for in 32-byte pieces after its first 32 bytes, which are the
  * public ρ that the Public key also holds.
  */
 function secretsIn(memory: WebAssembly.Memory, secrets: Record<string, Uint8Array>): string[] {
-  const bytes = Buffer.from(memory.buffer);
+  const bytes = latin1(new Uint8Array(memory.buffer));
   return Object.entries(secrets).flatMap(([name, secret]) => {
     const pieces =
       secret.length === 32
@@ -21,7 +31,7 @@ function secretsIn(memory: WebAssembly.Memory, secrets: Record<string, Uint8Arra
         : Array.from({ length: (secret.length - 32) / 32 }, (_, index) =>
             secret.subarray(32 * (index + 1), 32 * (index + 2)),
           );
-    return pieces.some((piece) => bytes.indexOf(piece) !== -1) ? [name] : [];
+    return pieces.some((piece) => bytes.includes(latin1(piece))) ? [name] : [];
   });
 }
 

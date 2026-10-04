@@ -101,10 +101,8 @@ describe("the Byte contract against the Oracle", () => {
     if (kind === "truncate") {
       return value.slice(0, at % value.length);
     }
-    const flipped = Buffer.from(value);
-    const index = at % flipped.length;
-    flipped.writeUInt8(flipped.readUInt8(index) ^ mask, index);
-    return new Uint8Array(flipped);
+    const index = at % value.length;
+    return value.map((byte, position) => (position === index ? byte ^ mask : byte));
   }
 
   test("verify rejects a mutated signature, message, Context or Public key, as the Oracle does", () => {
