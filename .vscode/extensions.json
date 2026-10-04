@@ -1,0 +1,5 @@
+{
+  "recommendations": ["oxc.oxc-vscode"],
+  // The ESLint extension would lint the same files as oxlint, with different rules.
+  "unwantedRecommendations": ["dbaeumer.vscode-eslint"]
+}

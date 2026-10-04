@@ -1,0 +1,18 @@
+{
+  // oxlint lints this repo. The ESLint extension would lint the same files with different rules.
+  "eslint.enable": false,
+  // Code actions run in this order. Lint fixes go first because they can leave code unformatted, the same
+  // order as the pre-commit hook. oxfmt then formats the whole file.
+  "editor.codeActionsOnSave": {
+    "source.fixAll.oxc": "explicit",
+    "source.format.oxc": "explicit"
+  },
+  // Suggestions and dangerous fixes can change what the code does, so only safe fixes run.
+  "oxc.fixKind": "safe_fix",
+  // Every language oxfmt formats without plugins, so Prettier never formats these. The code action above
+  // already formats them on save, so format on save stays off to avoid a second pass.
+  "[css][graphql][handlebars][html][javascript][javascriptreact][json][json5][jsonc][less][markdown][mdx][mjml][scss][toml][typescript][typescriptreact][vue][yaml]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": false
+  }
+}
