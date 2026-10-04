@@ -30,7 +30,9 @@ describe("ACVP ML-DSA-87 keyGen", () => {
 
 test("a later keygen leaves an earlier key pair unchanged", () => {
   const [first, second] = cases.map(([, , entry]) => entry);
-  if (first === undefined || second === undefined) throw new Error("the capture has fewer than two tests");
+  if (first === undefined || second === undefined) {
+    throw new Error("the capture has fewer than two tests");
+  }
 
   const earlier = mlDsa.keygen(bytes(first.seed));
   mlDsa.keygen(bytes(second.seed));

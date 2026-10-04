@@ -39,7 +39,9 @@ describe("ACVP ML-DSA-87 sigGen, external interface, pure", () => {
 });
 
 const withEmptyContext = cases.find(({ entry }) => entry.context === "");
-if (withEmptyContext === undefined) throw new Error("the capture has no sigGen test with an empty Context");
+if (withEmptyContext === undefined) {
+  throw new Error("the capture has no sigGen test with an empty Context");
+}
 
 test("an omitted Context signs as the empty Context", () => {
   const { rnd, entry } = withEmptyContext;

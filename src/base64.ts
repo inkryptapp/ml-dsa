@@ -20,10 +20,25 @@ export function decodeBase64(text: string): Uint8Array<ArrayBuffer> {
 }
 
 function sextet(code: number): number {
-  if (code >= 0x41 && code <= 0x5a) return code - 0x41; // A-Z
-  if (code >= 0x61 && code <= 0x7a) return code - 0x61 + 26; // a-z
-  if (code >= 0x30 && code <= 0x39) return code - 0x30 + 52; // 0-9
-  if (code === 0x2b) return 62; // +
-  if (code === 0x2f) return 63; // /
+  // A-Z
+  if (code >= 0x41 && code <= 0x5a) {
+    return code - 0x41;
+  }
+  // a-z
+  if (code >= 0x61 && code <= 0x7a) {
+    return code - 0x61 + 26;
+  }
+  // 0-9
+  if (code >= 0x30 && code <= 0x39) {
+    return code - 0x30 + 52;
+  }
+  // +
+  if (code === 0x2b) {
+    return 62;
+  }
+  // /
+  if (code === 0x2f) {
+    return 63;
+  }
   throw new Error(`invalid base64 character code ${code}`);
 }

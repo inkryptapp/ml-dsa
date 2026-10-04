@@ -31,7 +31,9 @@ describe("ACVP ML-DSA-87 sigVer, external interface, pure", () => {
 });
 
 const [accepted] = cases.filter(({ entry }) => entry.testPassed).map(({ entry }) => entry);
-if (accepted === undefined) throw new Error("the capture has no valid sigVer test");
+if (accepted === undefined) {
+  throw new Error("the capture has no valid sigVer test");
+}
 const validArgs = {
   publicKey: bytes(accepted.pk),
   message: bytes(accepted.message),

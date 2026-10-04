@@ -131,7 +131,9 @@ const intrinsicLength = Object.getOwnPropertyDescriptor(
 )?.get;
 
 function lengthOf(bytes: Uint8Array): number {
-  if (intrinsicLength === undefined) throw new Error("this runtime has no TypedArray length getter");
+  if (intrinsicLength === undefined) {
+    throw new Error("this runtime has no TypedArray length getter");
+  }
   return intrinsicLength.call(bytes);
 }
 
@@ -144,8 +146,12 @@ function invalidBytes(
   value: unknown,
   length?: number | { max: number },
 ): TypeError | RangeError | undefined {
-  if (!(value instanceof Uint8Array)) return new TypeError(`${name} must be a Uint8Array`);
-  if (length === undefined) return undefined;
+  if (!(value instanceof Uint8Array)) {
+    return new TypeError(`${name} must be a Uint8Array`);
+  }
+  if (length === undefined) {
+    return undefined;
+  }
   const actual = lengthOf(value);
   if (typeof length === "number") {
     return actual === length ? undefined : new RangeError(`${name} must be ${length} bytes, got ${actual}`);
@@ -202,11 +208,15 @@ function createMlDsa87({ memory, heapBase, keygen, sign, verify }: Exports): MlD
   return {
     keygen(seed) {
       const invalid = invalidBytes("seed", seed, ML_DSA_87_SEED_BYTES);
-      if (invalid !== undefined) throw invalid;
+      if (invalid !== undefined) {
+        throw invalid;
+      }
       const view = viewTo(messageAt);
       view.set(seed, seedAt);
       const code = keygen(publicKeyAt, secretKeyAt, seedAt);
-      if (code !== 0) throw new Error("mldsa-native keygen failed", { cause: { code } });
+      if (code !== 0) {
+        throw new Error("mldsa-native keygen failed", { cause: { code } });
+      }
       return {
         publicKey: view.slice(publicKeyAt, publicKeyAt + ML_DSA_87_PUBLIC_KEY_BYTES),
         secretKey: view.slice(secretKeyAt, secretKeyAt + ML_DSA_87_SECRET_KEY_BYTES),
@@ -214,14 +224,18 @@ function createMlDsa87({ memory, heapBase, keygen, sign, verify }: Exports): MlD
     },
 
     sign(args) {
-      if (!isObject(args)) throw new TypeError("sign takes an object of named arguments");
+      if (!isObject(args)) {
+        throw new TypeError("sign takes an object of named arguments");
+      }
       const { secretKey, message, context = EMPTY, rnd } = args;
       const invalid =
         invalidBytes("secretKey", secretKey, ML_DSA_87_SECRET_KEY_BYTES) ??
         invalidBytes("message", message) ??
         invalidBytes("context", context, { max: ML_DSA_87_MAX_CONTEXT_BYTES }) ??
         invalidBytes("rnd", rnd, ML_DSA_87_RND_BYTES);
-      if (invalid !== undefined) throw invalid;
+      if (invalid !== undefined) {
+        throw invalid;
+      }
       const messageLength = lengthOf(message);
       const view = viewTo(messageAt + messageLength);
       view.set(message, messageAt);
@@ -237,7 +251,9 @@ function createMlDsa87({ memory, heapBase, keygen, sign, verify }: Exports): MlD
         rndAt,
         secretKeyAt,
       );
-      if (code !== 0) throw new Error("mldsa-native sign failed", { cause: { code } });
+      if (code !== 0) {
+        throw new Error("mldsa-native sign failed", { cause: { code } });
+      }
       return view.slice(signatureAt, signatureAt + ML_DSA_87_SIGNATURE_BYTES);
     },
 
@@ -245,14 +261,18 @@ function createMlDsa87({ memory, heapBase, keygen, sign, verify }: Exports): MlD
       // Anything verify can't check is not a valid signature: a hostile argument object, or a message too large
       // for the memory to grow to, answers false like a wrong length does.
       try {
-        if (!isObject(args)) return false;
+        if (!isObject(args)) {
+          return false;
+        }
         const { publicKey, message, context = EMPTY, signature } = args;
         const invalid =
           invalidBytes("publicKey", publicKey, ML_DSA_87_PUBLIC_KEY_BYTES) ??
           invalidBytes("message", message) ??
           invalidBytes("context", context, { max: ML_DSA_87_MAX_CONTEXT_BYTES }) ??
           invalidBytes("signature", signature, ML_DSA_87_SIGNATURE_BYTES);
-        if (invalid !== undefined) return false;
+        if (invalid !== undefined) {
+          return false;
+        }
         const messageLength = lengthOf(message);
         const view = viewTo(messageAt + messageLength);
         view.set(message, messageAt);
@@ -275,13 +295,21 @@ function parseExports(exports: WebAssembly.Exports): Exports {
     mldsa87_sign: sign,
     mldsa87_verify: verify,
   } = exports;
-  if (!(memory instanceof WebAssembly.Memory)) throw new Error("module exports no memory");
+  if (!(memory instanceof WebAssembly.Memory)) {
+    throw new Error("module exports no memory");
+  }
   if (!(heapBase instanceof WebAssembly.Global) || typeof heapBase.value !== "number") {
     throw new Error("module exports no __heap_base");
   }
-  if (typeof keygen !== "function") throw new Error("module exports no mldsa87_keygen");
-  if (typeof sign !== "function") throw new Error("module exports no mldsa87_sign");
-  if (typeof verify !== "function") throw new Error("module exports no mldsa87_verify");
+  if (typeof keygen !== "function") {
+    throw new Error("module exports no mldsa87_keygen");
+  }
+  if (typeof sign !== "function") {
+    throw new Error("module exports no mldsa87_sign");
+  }
+  if (typeof verify !== "function") {
+    throw new Error("module exports no mldsa87_verify");
+  }
   return {
     memory,
     heapBase: heapBase.value,

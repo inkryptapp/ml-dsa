@@ -46,16 +46,22 @@ function isExternalPure87(group) {
 async function fetchPinned({ file, sha256 }) {
   const url = `https://raw.githubusercontent.com/usnistgov/ACVP-Server/${COMMIT}/${file}`;
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  if (!response.ok) {
+    throw new Error(`${url}: HTTP ${response.status}`);
+  }
   const bytes = Buffer.from(await response.arrayBuffer());
   const actual = createHash("sha256").update(bytes).digest("hex");
-  if (actual !== sha256) throw new Error(`${url}: SHA-256 ${actual}, expected ${sha256}`);
+  if (actual !== sha256) {
+    throw new Error(`${url}: SHA-256 ${actual}, expected ${sha256}`);
+  }
   return bytes.toString("utf8");
 }
 
 function licenseSection(readme) {
   const match = /^## License\s*\n([\s\S]*?)\n## /m.exec(readme);
-  if (match?.[1] === undefined) throw new Error("README.md has no License section");
+  if (match?.[1] === undefined) {
+    throw new Error("README.md has no License section");
+  }
   return match[1].trim();
 }
 
@@ -74,7 +80,9 @@ const modes = await Promise.all(
   Object.entries(SOURCES).map(async ([mode, source]) => {
     const { vsId, revision, testGroups } = JSON.parse(await fetchPinned(source));
     const groups = testGroups.filter(source.select);
-    if (groups.length === 0) throw new Error(`${source.file}: no group selected`);
+    if (groups.length === 0) {
+      throw new Error(`${source.file}: no group selected`);
+    }
     return [mode, { file: source.file, sha256: source.sha256, vsId, revision, groups }];
   }),
 );
