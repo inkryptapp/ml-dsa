@@ -7,6 +7,7 @@
     ".claude",
     "pnpm-lock.yaml",
     "native/flake.lock",
+    "native/vendor",
     "src/mldsa87-wasm.ts",
     "test/vectors/*.json"
   ]

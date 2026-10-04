@@ -48,5 +48,33 @@
           '';
         };
       });
+
+      # Upstream's mldsa/ tree and its licence, vendored for readers and for non-Nix builds (ADR 0001). The build
+      # itself compiles the flake input, and this check fails if the vendored copy differs from it by a byte.
+      checks = forAllSystems (pkgs: {
+        vendored = pkgs.runCommand "vendored-mldsa-native-matches-pin" { } ''
+          diff -r ${mldsa-native}/mldsa ${./vendor/mldsa-native/mldsa}
+          diff ${mldsa-native}/LICENSE ${./vendor/mldsa-native/LICENSE}
+          touch $out
+        '';
+      });
+
+      # Rewrites vendor/mldsa-native from the flake input: `scripts/nix run path:.#vendor`, run from native/.
+      apps = forAllSystems (pkgs: {
+        vendor = {
+          type = "app";
+          meta.description = "Rewrite vendor/mldsa-native from the flake input";
+          program = toString (
+            pkgs.writeShellScript "vendor-mldsa-native" ''
+              set -eu
+              test -f flake.nix || { echo "run from native/" >&2; exit 1; }
+              rm -rf vendor/mldsa-native
+              mkdir -p vendor/mldsa-native
+              cp -R ${mldsa-native}/mldsa ${mldsa-native}/LICENSE vendor/mldsa-native/
+              chmod -R u+w vendor/mldsa-native
+            ''
+          );
+        };
+      });
     };
 }
