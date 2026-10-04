@@ -62,4 +62,26 @@ describe("keygen rejects a Seed it can't use", () => {
   test.each([31, 33])("RangeError for a %i-byte Seed", (length) => {
     expect(() => mlDsa.keygen(new Uint8Array(length))).toThrow(RangeError);
   });
+
+  // An empty array that reports 32 bytes would otherwise run keygen on whatever Seed is already in memory.
+  class ClaimsThirtyTwoBytes extends Uint8Array {
+    override get length(): number {
+      return 32;
+    }
+  }
+  const lyingSeeds = [
+    ["an own length property", () => Object.defineProperty(new Uint8Array(0), "length", { value: 32 })],
+    ["a subclass length getter", () => new ClaimsThirtyTwoBytes(0)],
+  ] as const;
+
+  test.each(lyingSeeds)(
+    "RangeError for an empty Seed that claims 32 bytes through %s",
+    async (_name, seed) => {
+      const fresh = await loadMlDsa87();
+      expect(() => fresh.keygen(seed())).toThrow(RangeError);
+
+      fresh.keygen(new Uint8Array(32).fill(7));
+      expect(() => fresh.keygen(seed())).toThrow(RangeError);
+    },
+  );
 });

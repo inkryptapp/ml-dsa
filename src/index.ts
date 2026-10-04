@@ -30,7 +30,7 @@ export interface MlDsa87 {
    * The package draws no randomness, so draw the Seed from a CSPRNG such as `crypto.getRandomValues`.
    *
    * @throws TypeError if `seed` isn't a `Uint8Array`.
-   * @throws RangeError if `seed.length` isn't {@link ML_DSA_87_SEED_BYTES}.
+   * @throws RangeError if `seed` isn't exactly {@link ML_DSA_87_SEED_BYTES} bytes long.
    * @throws Error if mldsa-native reports a failure. Its `cause` is `{ code }`, holding mldsa-native's return code.
    */
   keygen(seed: Uint8Array): MlDsa87KeyPair;
@@ -44,6 +44,18 @@ interface Exports {
 }
 
 const PAGE_BYTES = 65536;
+
+// The engine's own length getter for typed arrays. `Uint8Array.prototype.set` copies the real length, so a length
+// read through `bytes.length`, which an own property or a subclass getter can fake, could disagree with what's copied.
+const intrinsicLength = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  "length",
+)?.get;
+
+function lengthOf(bytes: Uint8Array): number {
+  if (intrinsicLength === undefined) throw new Error("this runtime has no TypedArray length getter");
+  return intrinsicLength.call(bytes);
+}
 
 /**
  * Compiles and instantiates the WebAssembly module embedded in the package. Loading makes no network request.
@@ -75,8 +87,9 @@ function createMlDsa87({ memory, heapBase, keygen }: Exports): MlDsa87 {
   return {
     keygen(seed) {
       if (!(seed instanceof Uint8Array)) throw new TypeError("seed must be a Uint8Array");
-      if (seed.length !== ML_DSA_87_SEED_BYTES) {
-        throw new RangeError(`seed must be ${ML_DSA_87_SEED_BYTES} bytes, got ${seed.length}`);
+      const length = lengthOf(seed);
+      if (length !== ML_DSA_87_SEED_BYTES) {
+        throw new RangeError(`seed must be ${ML_DSA_87_SEED_BYTES} bytes, got ${length}`);
       }
       const view = new Uint8Array(memory.buffer);
       view.set(seed, seedAt);
