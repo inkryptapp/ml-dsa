@@ -1,0 +1,5 @@
+# WebdriverIO downloads the driver it needs when `pnpm test:matrix` starts a session, so these packages'
+# install-time driver downloads are skipped.
+allowBuilds:
+  edgedriver: false
+  geckodriver: false

@@ -1,6 +1,13 @@
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig } from "vitest/config";
 
+/** What every browser project runs: the whole suite but the Node-only tests. The version matrix reuses it. */
+export const browserSuite = {
+  include: ["test/**/*.test.ts"],
+  exclude: ["test/**/*.node.test.ts"],
+  globalSetup: ["test/compile-package.ts"],
+};
+
 export default defineConfig({
   test: {
     projects: [
@@ -15,9 +22,7 @@ export default defineConfig({
       {
         test: {
           name: "browser",
-          include: ["test/**/*.test.ts"],
-          exclude: ["test/**/*.node.test.ts"],
-          globalSetup: ["test/compile-package.ts"],
+          ...browserSuite,
           browser: {
             enabled: true,
             provider: playwright(),
