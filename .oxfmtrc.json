@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 110,
+  "ignorePatterns": [
+    "dist",
+    "node_modules",
+    ".claude",
+    "pnpm-lock.yaml",
+    "native/flake.lock",
+    "src/mldsa87-wasm.ts",
+    "test/vectors/*.json"
+  ]
+}

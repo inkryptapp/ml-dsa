@@ -1,0 +1,45 @@
+#!/bin/sh
+# Run nix inside a digest-pinned nixos/nix container, so the host needs no Nix install.
+#
+#   scripts/nix build path:.#default     (from any directory inside the repo)
+#
+# x86_64-linux builds: keep nix itself native and let only the builder run
+# under the podman VM's binfmt qemu-x86_64:
+#   scripts/nix build path:.#packages.x86_64-linux.default --option extra-platforms x86_64-linux
+# (Running the x86_64 nix binary itself under qemu, i.e. podman run
+# --platform linux/amd64, segfaults at startup with qemu 10.1.4.)
+#
+# The repo is bind-mounted at /work and the container starts in the
+# directory matching the host cwd. /nix lives in a named volume so the store
+# persists. On first use podman copies the image's own /nix (the Nix
+# installation itself) into the empty volume. That copy happens only once, so
+# the volume name includes the image digest: a new digest gets a fresh store.
+set -eu
+
+# docker.io/nixos/nix:latest (Nix 2.35.2) multi-arch index, resolved 2026-10-03
+DIGEST=7a007c766426c1877758ddc5cb87a965ac131fc78c582ce0083d922d51ae945c
+IMAGE=docker.io/nixos/nix@sha256:$DIGEST
+case "$(uname -m)" in
+  arm64|aarch64) ARCH=arm64 ;;
+  x86_64|amd64) ARCH=amd64 ;;
+  *) echo "scripts/nix: unsupported host $(uname -m)" >&2; exit 1 ;;
+esac
+VOLUME=ml-dsa-nix-$ARCH-$DIGEST
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd -P)
+HERE=$(pwd -P)
+case "$HERE" in
+  "$ROOT"|"$ROOT"/*) REL=${HERE#"$ROOT"} ;;
+  *) echo "scripts/nix: run from inside $ROOT" >&2; exit 1 ;;
+esac
+
+TTY=
+if [ -t 0 ] && [ -t 1 ]; then TTY=-t; fi
+
+exec podman run --rm -i $TTY \
+  --platform "linux/$ARCH" \
+  -v "$VOLUME:/nix" \
+  -v "$ROOT:/work" \
+  -w "/work$REL" \
+  "$IMAGE" \
+  nix --extra-experimental-features 'nix-command flakes' "$@"
