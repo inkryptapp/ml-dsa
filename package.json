@@ -2,7 +2,14 @@
   "name": "@inkrypt/ml-dsa",
   "version": "0.0.0",
   "description": "ML-DSA-87 (FIPS 204) from mldsa-native, compiled to WebAssembly.",
+  "license": "Apache-2.0 OR MIT",
+  "files": [
+    "dist",
+    "LICENSE-APACHE",
+    "LICENSE-MIT"
+  ],
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -11,7 +18,8 @@
   },
   "scripts": {
     "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp native/vendor/mldsa-native/LICENSE dist/LICENSE-mldsa-native",
+    "prepack": "pnpm build",
     "build:wasm": "sh scripts/build-wasm.sh",
     "vendor": "cd native && ../scripts/nix run path:.#vendor",
     "check": "sh scripts/check.sh",
@@ -30,6 +38,7 @@
     "@types/node": "22.20.5",
     "@vitest/browser-playwright": "5.0.3",
     "@vitest/browser-webdriverio": "5.0.0",
+    "es-module-lexer": "2.3.2",
     "fast-check": "4.10.2",
     "lint-staged": "17.6.0",
     "oxfmt": "0.71.0",
