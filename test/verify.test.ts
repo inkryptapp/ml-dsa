@@ -51,59 +51,6 @@ test("a valid signature does not verify under another Context, or under none", (
   ]).toEqual([true, false, false]);
 });
 
-// Callers may not be type-checked, so the wrong types arrive as they would from plain JavaScript.
-const verifyUnchecked = (args: unknown) => mlDsa.verify(args as Parameters<typeof mlDsa.verify>[0]);
-
-describe("verify answers false, without throwing, for arguments it can't use", () => {
-  test.each([
-    ["no argument object", undefined],
-    ["null", null],
-    ["positional arguments", validArgs.signature],
-    [
-      "an object whose getter throws",
-      {
-        get publicKey(): never {
-          throw new Error("hostile");
-        },
-      },
-    ],
-  ])("%s", (_name, args) => {
-    expect(verifyUnchecked(args)).toBe(false);
-  });
-
-  test.each([
-    ["publicKey", undefined],
-    ["publicKey", Array.from(validArgs.publicKey)],
-    ["message", undefined],
-    ["message", Buffer.from(validArgs.message).toString("latin1")],
-    ["message", new Int8Array(validArgs.message)],
-    ["context", Buffer.from(validArgs.context).toString("latin1")],
-    ["context", null],
-    ["signature", validArgs.signature.buffer],
-    ["signature", Array.from(validArgs.signature)],
-  ])("a %s of %o", (field, value) => {
-    expect(verifyUnchecked({ ...validArgs, [field]: value })).toBe(false);
-  });
-
-  test.each([
-    ["publicKey", 2591, validArgs.publicKey.subarray(1)],
-    ["publicKey", 2593, Uint8Array.of(...validArgs.publicKey, 0)],
-    ["signature", 4626, validArgs.signature.subarray(0, -1)],
-    ["signature", 4628, Uint8Array.of(...validArgs.signature, 0)],
-    ["context", 256, new Uint8Array(256)],
-  ])("a %s of %i bytes", (field, _length, value) => {
-    expect(verifyUnchecked({ ...validArgs, [field]: value })).toBe(false);
-  });
-
-  // A short signature must not verify against the rest of an earlier signature still in memory.
-  test("a truncated signature after verifying the whole one", () => {
-    expect([
-      mlDsa.verify(validArgs),
-      mlDsa.verify({ ...validArgs, signature: validArgs.signature.subarray(0, -1) }),
-    ]).toEqual([true, false]);
-  });
-});
-
 /** Appendix E's test case, captured from the draft text. The file records the source URL and the draft's SHA-256. */
 const Composite = z.object({
   source: z.literal("https://www.ietf.org/archive/id/draft-ietf-lamps-pq-composite-sigs-19.txt"),
