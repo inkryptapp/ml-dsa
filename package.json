@@ -56,8 +56,15 @@
       "oxfmt --no-error-on-unmatched-pattern"
     ]
   },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=22.22.1",
+      "onFail": "error"
+    }
+  },
   "engines": {
-    "node": ">=22.22.1"
+    "node": ">=22"
   },
   "packageManager": "pnpm@12.8.1"
 }

@@ -121,7 +121,7 @@ The cryptography is [mldsa-native](https://github.com/pq-code-package/mldsa-nati
 
 The module embedded in `dist/mldsa87-wasm.js` is committed as `src/mldsa87-wasm.ts`. Its first lines give the module's size and SHA-256. You can rebuild it from source and check that you get the same bytes.
 
-The build runs Nix inside a container pinned by digest, so you need no Nix on your machine. You need Node 22 or later, pnpm and [Podman](https://podman.io).
+The build runs Nix inside a container pinned by digest, so you need no Nix on your machine. You need Node 22.22.1 or later (the floor for the development tools), pnpm and [Podman](https://podman.io).
 
 1. Clone the repository and install the development dependencies:
 
