@@ -64,6 +64,10 @@ export default defineConfig({
 		"*": "vp check --fix --no-error-on-unmatched-pattern",
 	},
 	test: {
-		include: ["packages/*/test/**/*.test.ts"],
+		include: [
+			"packages/*/test/**/*.test.ts",
+			"packages/*/check/**/*.test.ts",
+			"scripts/**/*.test.ts",
+		],
 	},
 });
