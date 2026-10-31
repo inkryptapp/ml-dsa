@@ -3,7 +3,11 @@
 	"compilerOptions": {
 		"isolatedDeclarations": false,
 		"declaration": false,
-		"types": ["node"]
+		"types": ["node"],
+		// Node runs the scripts as they are, so they import each other by their
+		// `.ts` names and use only syntax that Node can strip.
+		"allowImportingTsExtensions": true,
+		"erasableSyntaxOnly": true
 	},
-	"include": ["vite.config.ts"]
+	"include": ["vite.config.ts", "scripts"]
 }

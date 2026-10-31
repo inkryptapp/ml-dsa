@@ -1,0 +1,10 @@
+#!/bin/sh
+# The check command. scripts/check.ts runs its steps. Install the dev tools
+# with `pnpm install` before the first run.
+#
+#   scripts/check                 runs every step, and an arm64 host also
+#                                 builds x86_64 under emulation
+#   scripts/check --native-only   builds only the host's own system, as CI does
+set -eu
+
+exec node "$(dirname "$0")/check.ts" "$@"

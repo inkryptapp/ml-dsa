@@ -6,7 +6,7 @@
 		"prepare": "vp config --hooks --no-agent",
 		"check": "vp check",
 		"lint": "vp lint",
-		"typecheck": "tsc -p tsconfig.json && tsc -p packages/ml-dsa && tsc -p packages/ml-dsa/test",
+		"typecheck": "tsc -p tsconfig.json && tsc -p packages/ml-dsa && tsc -p packages/ml-dsa/test && tsc -p packages/ml-dsa/check",
 		"test": "vp test run"
 	},
 	"devDependencies": {

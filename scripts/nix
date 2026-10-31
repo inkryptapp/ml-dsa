@@ -1,0 +1,66 @@
+#!/bin/sh
+# Runs Nix in the digest-pinned nixos/nix container, so that developers and CI
+# build with the same Nix and the same settings. It takes Nix's own arguments,
+# and runs them in the repo root, so refer to the flake as `.`:
+#
+#   scripts/nix derivation show .#packages.aarch64-linux.wasm
+#
+# Build the wasm module through scripts/check, which runs the pin guard before
+# every build.
+#
+# The container always runs on the host's own architecture. To build
+# x86_64-linux on an arm64 host, add `--option extra-platforms x86_64-linux`,
+# and the container host's emulator runs the build steps. Named volumes keep
+# /nix and the fetcher cache between runs. Each volume name holds the image
+# digest, because the container engine copies the image's /nix into a volume
+# only when it creates the volume.
+set -eu
+
+digest=sha256:ff480dbb23511aa1c10710aa068ceea5b93fed9bfce5f5379f3a6b07282cbc7b
+image=docker.io/nixos/nix@$digest
+
+case $(uname -m) in
+arm64 | aarch64) arch=arm64 ;;
+x86_64 | amd64) arch=amd64 ;;
+*)
+	echo "scripts/nix: the build image runs only on arm64 and x86_64 hosts, not on $(uname -m)." >&2
+	exit 1
+	;;
+esac
+
+if command -v docker >/dev/null 2>&1; then
+	engine=docker
+elif command -v podman >/dev/null 2>&1; then
+	engine=podman
+else
+	echo "scripts/nix: the build needs Docker or Podman, and neither is on PATH." >&2
+	exit 1
+fi
+
+root=$(cd "$(dirname "$0")/.." && pwd -P)
+volume=ml-dsa-nix-$arch-${digest#sha256:}
+
+# A linked worktree and the repo's git folder name each other by their host
+# paths. So the container mounts the repo at its host path. When the git folder
+# lies outside the repo, the container mounts it at its host path too. The
+# build reads only store paths, so the mount path doesn't change the module.
+git_dir=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || git_dir=
+case $git_dir in
+"$root"/*) git_dir= ;;
+esac
+
+echo "scripts/nix: $engine runs $image for linux/$arch" >&2
+
+# The container prints the platform that the image's index resolved to. The
+# repo's files belong to the host user, not to the container's root user, so
+# git and Nix would refuse to read the repo without the safe.directory entry.
+exec "$engine" run --rm --platform "linux/$arch" \
+	-v "$volume:/nix" \
+	-v "$volume-cache:/root/.cache" \
+	-v "$root:$root" -w "$root" \
+	${git_dir:+-v "$git_dir:$git_dir"} \
+	-v "$root/nix.conf:/etc/ml-dsa/nix.conf:ro" -e NIX_CONF_DIR=/etc/ml-dsa \
+	"$image" \
+	sh -c 'echo "scripts/nix: the container runs on linux/$(uname -m)" >&2 &&
+		git config --global --add safe.directory "*" &&
+		exec nix "$@"' nix "$@"
