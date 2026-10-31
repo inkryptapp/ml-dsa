@@ -1,0 +1,15 @@
+packages:
+  - packages/*
+
+# Every package resolves `vite` and `vitest` to the copies that Vite+ 1.3.0
+# bundles. Without the `vitest` pin, a dependency can install a second Vitest
+# with its own mocks, `expect`, and runner state.
+overrides:
+  vite@*: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vitest@*: 5.0.5
+
+# The vite alias reports Vite+'s version, not a Vite 8 version, so Vitest's
+# vite peer range can't match it.
+peerDependencyRules:
+  allowedVersions:
+    vite: "*"

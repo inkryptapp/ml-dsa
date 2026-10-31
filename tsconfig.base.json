@@ -1,0 +1,14 @@
+{
+	"extends": "@tsconfig/strictest/tsconfig.json",
+	"compilerOptions": {
+		"target": "es2024",
+		"lib": ["es2024"],
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"verbatimModuleSyntax": true,
+		"isolatedDeclarations": true,
+		"declaration": true,
+		"noEmit": true,
+		"types": []
+	}
+}

@@ -21,6 +21,7 @@ The public API is three frozen objects, `mlDsa44`, `mlDsa65`, and `mlDsa87`, eac
   ```
 
   Plain `vi.mock("ml-dsa")` also works, but it replaces every function with a stub that returns `undefined`. The README doesn't suggest `vi.mock("ml-dsa", { spy: true })`, because in Vitest 5.0.3 it silently leaves the functions inside a frozen object unspied, and the test fails only later, with "is not a spy".
+
 - **Verification.** ACVP's four files and Wycheproof run through the narrowest path that produces each expected output, by a total, exclusive routing table, with coverage credited per segment of the public path. noble 0.7.1 is the differential reference on a seeded, fixed case list in every runtime.
 
 ## Considered options
