@@ -3,6 +3,6 @@
 	"compilerOptions": {
 		"types": ["node"]
 	},
-	"include": ["."],
+	"include": [".", "../src/ambient.d.ts"],
 	"exclude": ["fixtures"]
 }
