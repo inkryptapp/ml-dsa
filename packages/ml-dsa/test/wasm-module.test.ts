@@ -10,8 +10,8 @@ interface Descriptor {
 	readonly kind: string;
 }
 
-// Neither `lib: ["es2024"]` nor `@types/node` declares `WebAssembly`, so the
-// test declares the part that it calls.
+// The package's internal `WebAssembly` declaration has no `Module.exports` or
+// `Module.imports`, so the test declares the part that it calls.
 declare const WebAssembly: {
 	readonly Module: {
 		new (bytes: Uint8Array): object;
