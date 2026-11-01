@@ -1,11 +1,16 @@
+import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
 import { describe, expect, test } from "vite-plus/test";
 
+import { mlDsa44 } from "../src/index.js";
 import {
+	failNextCreation,
 	keyPair,
 	messageRepresentative,
+	setRecording,
 	signExternalMu,
 	signFromSecretKey,
 	signInternal,
+	testRecord,
 	verifyExternalMu,
 	verifyInternal,
 } from "../src/testing.js";
@@ -163,3 +168,32 @@ for (const { objectName, object, noble } of parameterSetCases) {
 		});
 	});
 }
+
+describe("the recording switch", () => {
+	test("turns the test record on, and turning it off clears the record", () => {
+		const verifyOptions = {
+			publicKey: new Uint8Array(mlDsa44.lengths.publicKey),
+			message: new Uint8Array(0),
+			signature: new Uint8Array(mlDsa44.lengths.signature),
+		};
+		const injected = new Error("injected");
+		try {
+			setRecording(true);
+			expect(testRecord()).toBeNull();
+			failNextCreation(injected);
+			expect(mlDsa44.verify(verifyOptions)).toBe(false);
+			expect(testRecord()).toStrictEqual({ failure: injected, dropped: false });
+
+			setRecording(false);
+			expect(testRecord()).toBeNull();
+			failNextCreation(injected);
+			expect(mlDsa44.verify(verifyOptions)).toBe(false);
+			expect(testRecord()).toBeNull();
+		} finally {
+			setRecording(false);
+		}
+		const seed = seedFrom(61);
+		expect(mlDsa44.keygen(seed)).toStrictEqual({ publicKey: ml_dsa44.keygen(seed).publicKey });
+		expect(freshMemoryMismatch()).toBeNull();
+	});
+});

@@ -33,6 +33,7 @@ jobs:
       - run: pnpm run check
       - run: pnpm run typecheck
       - run: pnpm test
+      - run: pnpm run coverage
 
   wasm:
     # Each runner builds its own architecture natively, and both builds must

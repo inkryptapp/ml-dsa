@@ -156,23 +156,26 @@ describe("the SHAKE256 release", () => {
 		}
 	});
 
-	test("runs before the fills, while the state and the message representative remain", () => {
-		const { shakeState, messageRepresentative: representative } = layout.regions;
-		const seen: { state?: boolean; representative?: boolean } = {};
-		const { result } = hooked(
-			(call) => {
+	test.each([
+		["sign", () => mlDsa44.sign(signOptions), reference],
+		["verify", () => mlDsa44.verify(verifyOptions), true],
+	])(
+		"runs before the fills in %s, while the state and the message representative remain",
+		(_, action, expected) => {
+			const { shakeState, messageRepresentative: representative } = layout.regions;
+			const seen: { state?: boolean; representative?: boolean } = {};
+			const { result } = hooked((call) => {
 				if (call.name === "mldsa_shake256_release") {
 					seen.state = !isAllZero(regionOf(call.memory, shakeState));
 					seen.representative = !isAllZero(regionOf(call.memory, representative));
 				}
 				return call.proceed();
-			},
-			() => mlDsa44.sign(signOptions),
-		);
-		expect(result).toStrictEqual(reference);
-		expect(seen).toStrictEqual({ state: true, representative: true });
-		expect(freshMemoryMismatch()).toBeNull();
-	});
+			}, action);
+			expect(result).toStrictEqual(expected);
+			expect(seen).toStrictEqual({ state: true, representative: true });
+			expect(freshMemoryMismatch()).toBeNull();
+		},
+	);
 
 	test("doesn't run when a status comes before any SHAKE256 init", () => {
 		const before = currentMemory();
