@@ -4,13 +4,38 @@ import { pointer, type Pointer } from "./brand.js";
 import * as messages from "./messages.js";
 import type { Site } from "./messages.js";
 import type { ModuleFunctions } from "./module-exports.js";
-import { longest, seedBytes } from "./parameter-sets.js";
+import { longest, maxContextBytes, randomnessBytes, seedBytes } from "./parameter-sets.js";
+import {
+	messageRepresentativeBytes,
+	prefixBytes,
+	publicKeyHashBytes,
+	shakeStateAlignment,
+	shakeStateBytes,
+} from "./upstream.js";
 
-/** A run of linear memory that holds one input or output of a call. */
+/** A run of linear memory that holds one input, output, or intermediate value of a call. */
 export interface Region {
 	readonly pointer: Pointer;
-	/** A view of exactly the region, so a longer copy throws instead of overrunning the next region. */
-	readonly bytes: Uint8Array<ArrayBuffer>;
+	readonly length: number;
+}
+
+/**
+ * The regions that the package lays out from `__heap_base`. Each one is sized
+ * for the largest parameter set, so every call uses the same layout.
+ */
+export interface Regions {
+	readonly seed: Region;
+	readonly randomness: Region;
+	readonly publicKey: Region;
+	readonly secretKey: Region;
+	readonly signature: Region;
+	readonly context: Region;
+	readonly prefix: Region;
+	readonly publicKeyHash: Region;
+	readonly messageRepresentative: Region;
+	readonly shakeState: Region;
+	/** One message chunk, which the message streams through. */
+	readonly chunk: Region;
 }
 
 /**
@@ -28,16 +53,21 @@ export interface Instance {
 	readonly stackLow: number;
 	readonly stackHigh: number;
 	readonly heapBase: number;
-	readonly seed: Region;
-	readonly publicKey: Region;
-	readonly secretKey: Region;
+	readonly regions: Regions;
 	readonly functions: ModuleFunctions;
 }
 
-/** How a call's work on an instance ended. A non-zero upstream code isn't an exception. */
-export type Outcome<Output> =
-	| { readonly kind: "done"; readonly output: Output }
-	| { readonly kind: "status"; readonly code: number };
+/**
+ * A failing return value from upstream, which isn't an exception: a non-zero
+ * return code, or a zero length from the prefix function.
+ */
+export interface Status {
+	readonly kind: "status";
+	readonly code: number;
+}
+
+/** How a call's work on an instance ended. */
+export type Outcome<Output> = { readonly kind: "done"; readonly output: Output } | Status;
 
 let compiled: WebAssembly.Module | undefined = undefined;
 
@@ -52,6 +82,46 @@ export type FunctionWrapper = (
 ) => ModuleFunctions;
 
 let wrapFunctions: FunctionWrapper | null = null;
+
+/**
+ * Lays out the regions in order from `heapBase`. Every region starts on the
+ * SHAKE256 state's alignment, the strictest that any region needs.
+ *
+ * @throws Error if the last region ends past `heapEnd`.
+ */
+function layOutRegions(heapBase: number, heapEnd: number): Regions {
+	let next = heapBase;
+	const region = (length: number): Region => {
+		const start = Math.ceil(next / shakeStateAlignment) * shakeStateAlignment;
+		next = start + length;
+		return Object.freeze({ pointer: pointer(start), length });
+	};
+	const regions: Regions = Object.freeze({
+		seed: region(seedBytes),
+		randomness: region(randomnessBytes),
+		publicKey: region(longest("publicKey")),
+		secretKey: region(longest("secretKey")),
+		signature: region(longest("signature")),
+		context: region(maxContextBytes),
+		prefix: region(prefixBytes),
+		publicKeyHash: region(publicKeyHashBytes),
+		messageRepresentative: region(messageRepresentativeBytes),
+		shakeState: region(shakeStateBytes),
+		chunk: region(sizes.chunkBytes),
+	});
+	if (next > heapEnd) {
+		throw new Error(messages.regionsOverflow());
+	}
+	return regions;
+}
+
+/**
+ * A view of exactly one region of an instance's memory, so a copy longer than
+ * the region throws instead of overrunning the next region.
+ */
+export function regionBytes(instance: Instance, region: Region): Uint8Array<ArrayBuffer> {
+	return instance.memory.subarray(region.pointer, region.pointer + region.length);
+}
 
 /**
  * Instantiates the compiled module, checks its geometry, and lays out the
@@ -90,19 +160,8 @@ export function createInstance(): Instance {
 		throw new Error(messages.badGeometry());
 	}
 
-	const seedAt = heapBase;
-	const publicKeyAt = seedAt + seedBytes;
-	const publicKeyBytes = longest("publicKey");
-	const secretKeyAt = publicKeyAt + publicKeyBytes;
-	const secretKeyBytes = longest("secretKey");
-	if (secretKeyAt + secretKeyBytes > heapEnd) {
-		throw new Error(messages.regionsOverflow());
-	}
-	const region = (at: number, length: number): Region =>
-		Object.freeze({ pointer: pointer(at), bytes: new Uint8Array(buffer, at, length) });
-
+	const regions = layOutRegions(heapBase, heapEnd);
 	const functions: ModuleFunctions = Object.freeze(exportedFunctions);
-
 	const memory = new Uint8Array(buffer);
 	return Object.freeze({
 		memory,
@@ -111,9 +170,7 @@ export function createInstance(): Instance {
 		stackLow,
 		stackHigh,
 		heapBase,
-		seed: region(seedAt, seedBytes),
-		publicKey: region(publicKeyAt, publicKeyBytes),
-		secretKey: region(secretKeyAt, secretKeyBytes),
+		regions,
 		functions: wrapFunctions === null ? functions : wrapFunctions(functions, memory),
 	});
 }
@@ -143,34 +200,64 @@ function instanceForCall(site: Site): Instance {
 }
 
 /**
+ * Starts the SHAKE256 state in the instance's `shakeState` region. A call's
+ * work calls it in place of the init export, so the core knows whether the
+ * state needs a release.
+ */
+export type InitShake = () => void;
+
+/**
  * Runs one call's work on an instance and wipes the instance before it
  * returns or throws. Every call that uses the module runs through this
  * function.
  *
- * On a healthy exit, it zeroes the wasm stack and `[__heap_base, end of
- * memory)`, so memory then equals a fresh instance's memory, and it puts the
- * instance back. Any exception while it holds the instance poisons the
- * instance: it zeroes the whole memory and drops the instance, and the next
- * call creates a new one. A non-zero upstream code wipes, keeps the instance,
- * and throws with `{ code }` as the cause.
+ * On a healthy exit, it releases the SHAKE256 state if the work started one,
+ * zeroes the wasm stack and `[__heap_base, end of memory)`, so memory then
+ * equals a fresh instance's memory, and puts the instance back. Any exception
+ * while it holds the instance poisons the instance: it zeroes the whole memory
+ * and drops the instance, and the next call creates a new one. A status
+ * outcome wipes, keeps the instance, and throws with `{ code }` as the cause.
  *
  * @throws Error with the failure as `cause`, if creating an instance fails, the
- * work throws, a wipe step throws, or the work ends with a non-zero code.
+ * work throws, a cleanup step throws, or the work ends with a status. A status
+ * stays the cause even if a cleanup step throws after it.
  */
-export function runCore<Output>(site: Site, work: (instance: Instance) => Outcome<Output>): Output {
+export function runCore<Output>(
+	site: Site,
+	work: (instance: Instance, initShake: InitShake) => Outcome<Output>,
+): Output {
 	const instance = instanceForCall(site);
 	slot = null;
 
 	const { memory, words, wordCount, stackLow, stackHigh, heapBase } = instance;
+	const shakeState = instance.regions.shakeState.pointer;
+	const init = instance.functions.mldsa_shake256_init;
+	const release = instance.functions.mldsa_shake256_release;
+	let shakeStarted = false;
+	const initShake: InitShake = () => {
+		init(shakeState);
+		shakeStarted = true;
+	};
 	let outcome: Outcome<Output> | null = null;
 	let poisoned = true;
 	let failure: unknown = undefined;
 	try {
-		outcome = work(instance);
+		outcome = work(instance, initShake);
 		poisoned = false;
 	} catch (error) {
 		failure = error;
 	} finally {
+		// The release runs before the fills, so the wasm stack fill also clears
+		// its frame. A poisoned instance gets no release, because the whole-memory
+		// fill zeroes the state.
+		if (!poisoned && shakeStarted) {
+			try {
+				release(shakeState);
+			} catch (error) {
+				poisoned = true;
+				failure = error;
+			}
+		}
 		if (!poisoned) {
 			try {
 				memory.fill(0, stackLow, stackHigh);
@@ -197,11 +284,11 @@ export function runCore<Output>(site: Site, work: (instance: Instance) => Outcom
 
 	// The error is built only after the cleanup, because building it can fail
 	// at the engine's stack limit.
+	if (outcome !== null && outcome.kind === "status") {
+		throw new Error(messages.failed(site), { cause: { code: outcome.code } });
+	}
 	if (poisoned || outcome === null) {
 		throw new Error(messages.failed(site), { cause: failure });
-	}
-	if (outcome.kind === "status") {
-		throw new Error(messages.failed(site), { cause: { code: outcome.code } });
 	}
 	return outcome.output;
 }

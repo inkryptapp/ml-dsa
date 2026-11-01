@@ -11,7 +11,16 @@ import {
 	setExportHook,
 	type ExportCall,
 } from "../src/testing.js";
-import { firstDifference, freshMemoryMismatch, prototypeOf, seedFrom, thrown } from "./helpers.js";
+import {
+	firstDifference,
+	freshMemoryMismatch,
+	isAllZero,
+	prototypeOf,
+	regionOf,
+	seedFrom,
+	thrown,
+	wipeAfterRawCall,
+} from "./helpers.js";
 
 afterEach(() => {
 	setExportHook(null);
@@ -40,10 +49,6 @@ function liveMemory(): Uint8Array<ArrayBuffer> {
 	return memory;
 }
 
-function isAllZero(bytes: Uint8Array): boolean {
-	return bytes.every((byte) => byte === 0);
-}
-
 /** Copies of an instance's seed and secret-key regions. */
 interface SecretRegions {
 	readonly seed: Uint8Array;
@@ -52,10 +57,9 @@ interface SecretRegions {
 
 /** Copies the seed and secret-key regions of the instance that `call` runs on. */
 function regionsDuring(call: ExportCall): SecretRegions {
-	const { seed: seedRegion, secretKey } = layout.regions;
 	return {
-		seed: call.memory.slice(seedRegion.start, seedRegion.end),
-		secretKey: call.memory.slice(secretKey.start, secretKey.end),
+		seed: regionOf(call.memory, layout.regions.seed).slice(),
+		secretKey: regionOf(call.memory, layout.regions.secretKey).slice(),
 	};
 }
 
@@ -182,12 +186,12 @@ describe("a failed instance creation after the import", () => {
 
 describe("a healthy call", () => {
 	test("zeroes the whole wasm stack and every byte from __heap_base", () => {
-		const { stack, regions } = layout;
+		const { stack } = layout;
 		const paint = 0xa5;
 		let painted = 0;
 		setExportHook((call) => {
 			call.memory.fill(paint, stack.start, stack.end);
-			call.memory.fill(paint, regions.secretKey.end);
+			call.memory.fill(paint, layout.regions.seed.pointer + layout.regions.seed.length);
 			painted += 1;
 			return call.proceed();
 		});
@@ -217,20 +221,19 @@ describe("the raw exports", () => {
 			return call.proceed();
 		});
 		const { seed: seedRegion, publicKey, secretKey } = layout.regions;
-		memory.set(seed, seedRegion.start);
+		regionOf(memory, seedRegion).set(seed);
 		const code = raw?.mldsa44_keypair_internal(
-			pointer(publicKey.start),
-			pointer(secretKey.start),
-			pointer(seedRegion.start),
+			publicKey.pointer,
+			secretKey.pointer,
+			seedRegion.pointer,
 		);
 		expect(code).toBe(0);
-		expect(
-			memory.slice(publicKey.start, publicKey.start + mlDsa44.lengths.publicKey),
-		).toStrictEqual(reference.publicKey);
+		expect(regionOf(memory, publicKey).slice(0, mlDsa44.lengths.publicKey)).toStrictEqual(
+			reference.publicKey,
+		);
 		expect(hooked).toBe(0);
 
-		memory.fill(0, layout.stack.start, layout.stack.end);
-		memory.fill(0, layout.heapBase);
+		wipeAfterRawCall(memory);
 		expect(freshMemoryMismatch()).toBeNull();
 	});
 });

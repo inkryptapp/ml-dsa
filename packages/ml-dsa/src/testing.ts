@@ -2,7 +2,8 @@
  * The test-only entry point. It stays out of the package's `exports`, and it
  * shares the core and the instance slot with the public API, so a test that
  * imports both entries from the source sees the instances that the public API
- * uses. It adds hooks around every export call and snapshots of memory.
+ * uses. It adds hooks around every export call, snapshots of memory, and the
+ * message representative that `verify` computes.
  *
  * @packageDocumentation
  */
@@ -10,10 +11,24 @@
 // `createInstance` below needs.
 import "./index.js";
 import { pointer } from "./brand.js";
-import { createInstance, currentInstance, emptySlot, setFunctionWrapper } from "./core.js";
+import { checkBytes, checkContext, checkExactBytes } from "./bytes.js";
+import {
+	createInstance,
+	currentInstance,
+	emptySlot,
+	regionBytes,
+	runCore,
+	setFunctionWrapper,
+	type Regions,
+} from "./core.js";
+import { writeVerifierMessageRepresentative } from "./message-representative.js";
 import type { FunctionName, ModuleFunctions } from "./module-exports.js";
+import { readOptions } from "./options.js";
+import { parameterSets, type ObjectName } from "./parameter-sets.js";
+import { publicKeyHashOffset } from "./upstream.js";
 
 export { pointer };
+export type { Region, Regions } from "./core.js";
 
 /** One call from the package into a function export, as an {@link ExportHook} sees it. */
 export interface ExportCall {
@@ -47,12 +62,9 @@ export interface Layout {
 	/** The wasm stack, `[__stack_low, __stack_high)`. */
 	readonly stack: Range;
 	readonly heapBase: number;
-	/** The regions that the package lays out from `__heap_base`. */
-	readonly regions: {
-		readonly seed: Range;
-		readonly publicKey: Range;
-		readonly secretKey: Range;
-	};
+	readonly regions: Regions;
+	/** Where `sign` reads the public-key hash in a derived secret key. */
+	readonly publicKeyHashOffset: number;
 }
 
 let hook: ExportHook | null = null;
@@ -176,11 +188,8 @@ export const layout: Layout = Object.freeze({
 	memoryBytes: fresh.memory.length,
 	stack: range(fresh.stackLow, fresh.stackHigh - fresh.stackLow),
 	heapBase: fresh.heapBase,
-	regions: Object.freeze({
-		seed: range(fresh.seed.pointer, fresh.seed.bytes.length),
-		publicKey: range(fresh.publicKey.pointer, fresh.publicKey.bytes.length),
-		secretKey: range(fresh.secretKey.pointer, fresh.secretKey.bytes.length),
-	}),
+	regions: fresh.regions,
+	publicKeyHashOffset,
 });
 
 // From here on, the slot and every new instance run their export calls
@@ -217,4 +226,51 @@ export function currentMemory(): Uint8Array<ArrayBuffer> | null {
 export function rawExports(): ModuleFunctions | null {
 	const memory = currentMemory();
 	return memory === null ? null : (rawFunctions.get(memory) ?? null);
+}
+
+/** The named arguments of {@link messageRepresentative}. */
+export interface MessageRepresentativeOptions {
+	readonly publicKey: Uint8Array;
+	readonly message: Uint8Array;
+	readonly context?: Uint8Array | undefined;
+}
+
+const messageRepresentativeKeys = ["publicKey", "message", "context"] as const;
+
+/**
+ * The message representative that `verify` computes for a public key, a
+ * message, and a context string. It runs the same read step, input checks,
+ * core, and message-representative function as `verify`, and its errors name
+ * the `verify` site.
+ */
+export function messageRepresentative(
+	objectName: ObjectName,
+	options: MessageRepresentativeOptions,
+): Uint8Array<ArrayBuffer> {
+	const site = `${objectName}.verify` as const;
+	const values = readOptions(site, options, messageRepresentativeKeys);
+	const publicKey = checkExactBytes(
+		site,
+		"publicKey",
+		values.get("publicKey"),
+		parameterSets[objectName].publicKey,
+	);
+	const message = checkBytes(site, "message", values.get("message"));
+	const context = checkContext(site, values.get("context"));
+	return runCore(site, (instance, initShake) => {
+		const prefixStatus = writeVerifierMessageRepresentative(
+			instance,
+			initShake,
+			publicKey,
+			context,
+			message,
+		);
+		if (prefixStatus !== null) {
+			return prefixStatus;
+		}
+		return {
+			kind: "done",
+			output: regionBytes(instance, instance.regions.messageRepresentative).slice(),
+		};
+	});
 }
