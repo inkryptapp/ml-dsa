@@ -1,6 +1,7 @@
 /**
- * Builds small wasm modules byte by byte for the checks' tests, so a test can
- * give a reader exactly the section that it means to test.
+ * Builds small wasm modules byte by byte, so a test can give a reader exactly
+ * the section that it means to test. The path scan also builds its negative
+ * fixture with these.
  */
 
 /** An unsigned LEB128 number. */
@@ -77,4 +78,19 @@ export function producersSection(
 			]),
 		),
 	);
+}
+
+/** A `name` section with the given subsections, each an id and its contents. */
+export function nameSection(
+	...subsections: readonly (readonly [number, readonly number[]])[]
+): number[] {
+	return customSection(
+		"name",
+		subsections.flatMap(([id, contents]) => [id, ...u32(contents.length), ...contents]),
+	);
+}
+
+/** A `name` section that names each function `index` as `names[index]`. */
+export function functionNameSection(names: readonly string[]): number[] {
+	return nameSection([1, vector(names.map((text, index) => [...u32(index), ...name(text)]))]);
 }

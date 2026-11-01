@@ -11,9 +11,11 @@
 #   STACK_SIZE     the wasm stack size in bytes, from sizes.json
 #   out            the output folder
 #
-# With the argument `probe`, the file runs the check command's probes of
-# upstream's headers instead, with the same flags. The probe function below
-# says how.
+# Without an argument, or with `build`, the file builds the module and its
+# twin. With `debug`, it builds the -g module that the check command's path
+# scan reads. With `probe`, it runs the check command's probes of upstream's
+# headers instead, with the same flags. The debug and probe functions below
+# say how.
 #
 # Every compiler and linker flag lives in this file. Records 0001 to 0003 in
 # docs/adr/ hold the reasons.
@@ -93,30 +95,52 @@ for function in init absorb finalize squeeze release; do
 	exports+=("${namespace}_shake256_$function")
 done
 
-build() {
-	local objects=() parameter_set source object
+link_flags=(
+	--no-entry --stack-first
+	-z "stack-size=$STACK_SIZE" "--initial-memory=$MEMORY_SIZE" --no-growable-memory
+	--keep-section=producers --keep-section=target_features
+)
+for export in "${exports[@]}"; do
+	link_flags+=("--export=$export")
+done
+
+# Compiles every object with the object flags of its parameter set, followed
+# by the arguments, and sets objects to the object files in link order.
+compile() {
+	objects=()
+	local parameter_set source object
 	for parameter_set in "${parameter_sets[@]}"; do
 		set_object_flags "$parameter_set"
 		for source in "${sources[@]}"; do
 			object=obj/$parameter_set/${source%.c}.o
 			mkdir -p "$(dirname "$object")"
-			"$CC" "${object_flags[@]}" -c "$MLDSA_NATIVE/mldsa/$source" -o "$object"
+			"$CC" "${object_flags[@]}" "$@" -c "$MLDSA_NATIVE/mldsa/$source" -o "$object"
 			objects+=("$object")
 		done
 	done
+}
 
-	local link_flags=(
-		--no-entry --stack-first
-		-z "stack-size=$STACK_SIZE" "--initial-memory=$MEMORY_SIZE" --no-growable-memory
-		--keep-section=producers --keep-section=target_features
-	)
-	for export in "${exports[@]}"; do
-		link_flags+=("--export=$export")
-	done
-
+# The twin also exports the volatile barrier's opt-blocker, which wasm-ld
+# exports as an immutable global that holds its address. The check command
+# counts the loads from that address. The export adds a global and leaves the
+# code section unchanged.
+build() {
+	compile
 	mkdir -p "$out"
 	"$WASM_LD" "${link_flags[@]}" --strip-all -o "$out/mldsa.wasm" "${objects[@]}"
-	"$WASM_LD" "${link_flags[@]}" -o "$out/mldsa.unstripped.wasm" "${objects[@]}"
+	"$WASM_LD" "${link_flags[@]}" "--export=${namespace}_ct_opt_blocker_u64" \
+		-o "$out/mldsa.unstripped.wasm" "${objects[@]}"
+}
+
+# The check command's path scan reads this build. It compiles with -g and
+# links with every section kept, so the debug info names each root that the
+# compile reads, unless a prefix map renames it. The build folder isn't a store
+# path, so the scan can't compute it, and the build records it in a file.
+debug() {
+	compile -g
+	mkdir -p "$out"
+	"$WASM_LD" "${link_flags[@]}" -o "$out/mldsa.debug.wasm" "${objects[@]}"
+	printf '%s\n' "$PWD" >"$out/build-folder"
 }
 
 # Compiles the probe file named by the first argument with the object flags
@@ -183,12 +207,13 @@ probe() {
 
 case ${1-build} in
 build) build ;;
+debug) debug ;;
 probe)
 	shift
 	probe "$@"
 	;;
 *)
-	echo "build.sh: the only arguments are none, which builds the module, and probe." >&2
+	echo "build.sh: the argument must be build (the default), debug, or probe." >&2
 	exit 1
 	;;
 esac
