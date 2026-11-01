@@ -5,6 +5,7 @@
 
 import type { FunctionName } from "../src/module-exports.js";
 import type { ObjectName } from "../src/parameter-sets.js";
+import { cleanupPausesOf, type PausePoint } from "./debugger-pauses.js";
 import { parameterSetCases } from "./helpers.js";
 import {
 	type Base,
@@ -96,7 +97,10 @@ export type ListedRow =
 			readonly base: Base;
 	  }
 	| {
-			/** From the last export call on, every `fill` throws, after healthy work or after an exception. */
+			/**
+			 * From the last export call on, every `fill` and every `WeakSet` lookup
+			 * throws, after healthy work or after an exception.
+			 */
 			readonly kind: "throwing fills";
 			readonly base: Base;
 			readonly after: "healthy work" | "an exception";
@@ -114,9 +118,20 @@ export type ListedRow =
 			readonly nested: "sign" | "verify" | "trap";
 	  }
 	| {
-			/** An export hook of the outer call runs a public sign. */
+			/**
+			 * An export hook of the outer call runs a public sign while the outer
+			 * call holds the instance: the hook of the work's last export call, or
+			 * of the release inside the `finally` block.
+			 */
 			readonly kind: "public call from an export hook";
 			readonly base: Base;
+			readonly at: "the work's last export call" | "the release";
+	  }
+	| {
+			/** A debugger pauses the outer call at `point` of its cleanup, and runs a public sign. */
+			readonly kind: "public call from a debugger pause";
+			readonly base: Base;
+			readonly point: PausePoint;
 	  };
 
 export type Row = GeneratedRow | ListedRow;
@@ -304,7 +319,23 @@ export function listedRows(): readonly ListedRow[] {
 					nested,
 				})),
 			),
-			{ kind: "public call from an export hook", base: sign },
+			...operations.map((base): ListedRow => ({
+				kind: "public call from an export hook",
+				base,
+				at: "the work's last export call",
+			})),
+			...[sign, verify].map((base): ListedRow => ({
+				kind: "public call from an export hook",
+				base,
+				at: "the release",
+			})),
+			...operations.flatMap((base) =>
+				cleanupPausesOf(() => invoke(base, unchanged)).map((point): ListedRow => ({
+					kind: "public call from a debugger pause",
+					base,
+					point,
+				})),
+			),
 		];
 	});
 }
@@ -335,6 +366,8 @@ export function rowName(row: Row): string {
 		case "getter":
 			return `${baseName(row.base)}: a getter that runs a nested ${row.nested}`;
 		case "public call from an export hook":
-			return `${baseName(row.base)}: a public sign from an export hook`;
+			return `${baseName(row.base)}: a public sign from the hook of ${row.at}`;
+		case "public call from a debugger pause":
+			return `${baseName(row.base)}: a public sign from debugger pause ${row.point.position} of the cleanup, before \`${row.point.statement}\``;
 	}
 }

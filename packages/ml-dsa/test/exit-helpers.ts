@@ -6,6 +6,7 @@
 
 import type { ObjectName } from "../src/parameter-sets.js";
 import {
+	checkedOutMemory,
 	currentMemory,
 	freshMemory,
 	layout,
@@ -273,6 +274,12 @@ export function droppedAfter(failure: unknown): ExpectedRecord {
 export const kept: ExpectedRecord = { failure: null, dropped: false };
 
 /**
+ * The record of a call that caught no exception but dropped its instance,
+ * because an inner call zeroed it.
+ */
+export const zeroedByInnerCall: ExpectedRecord = { failure: null, dropped: true };
+
+/**
  * Checks the test record after a call. With recording off, or after a call
  * that never reached the core, the record must be empty.
  */
@@ -302,23 +309,29 @@ export function recordMismatches(recording: boolean, expected: ExpectedRecord): 
 	return mismatches;
 }
 
+/** A mismatch if `checkedOut` is still set after a row's call returned or threw. */
+function checkedOutMismatches(): readonly string[] {
+	return checkedOutMemory() === null ? [] : ["`checkedOut` isn't null."];
+}
+
 /**
- * The healthy helper. It checks that the slot holds the instance that the
- * call checked out, or any instance if `checkedOut` is `null`, that its whole
- * memory equals a fresh instance's memory, and that the caller got `expected`.
+ * The healthy helper. It checks that the slot holds `held`, the instance that
+ * the call checked out, or any instance if `held` is `null`, that its whole
+ * memory equals a fresh instance's memory, that `checkedOut` is `null`, and
+ * that the caller got `expected`.
  */
 export function healthyMismatches(
 	base: Base,
-	checkedOut: Uint8Array | null,
+	held: Uint8Array | null,
 	result: Result,
 	expected: Expected,
 ): readonly string[] {
-	const mismatches = [...resultMismatches(base, result, expected)];
+	const mismatches = [...resultMismatches(base, result, expected), ...checkedOutMismatches()];
 	const memory = currentMemory();
 	if (memory === null) {
 		return [...mismatches, "The slot is empty."];
 	}
-	if (checkedOut !== null && memory !== checkedOut) {
+	if (held !== null && memory !== held) {
 		mismatches.push("The slot holds another instance than the one that the call checked out.");
 	}
 	const offset = firstDifference(memory, freshMemory);
@@ -335,23 +348,31 @@ export function firstNonZero(memory: Uint8Array): number | null {
 
 /**
  * The poisoned helper. It checks that the dropped instance's whole memory
- * reads zero, that the slot is empty, that the caller got `expected`, and that
- * the next call returns the reference output on a new instance. `dropped` is
- * `null` when the call never had an instance.
+ * reads zero, that the slot is empty, that `checkedOut` is `null`, that the
+ * caller got `expected`, and that the next call returns the reference
+ * output on a new instance. `dropped` is `null` when the call never had an
+ * instance. After an inner call zeroed the instance, `inner` is the
+ * memory of the inner call's instance, which the slot may hold.
  */
 export function poisonedMismatches(
 	base: Base,
 	dropped: Uint8Array | null,
 	result: Result,
 	expected: Expected,
+	inner: Uint8Array | null = null,
 ): readonly string[] {
-	const mismatches = [...resultMismatches(base, result, expected)];
+	const mismatches = [...resultMismatches(base, result, expected), ...checkedOutMismatches()];
 	const offset = dropped === null ? null : firstNonZero(dropped);
 	if (offset !== null) {
 		mismatches.push(`The dropped instance's memory isn't zero at offset ${offset}.`);
 	}
-	if (currentMemory() !== null) {
-		mismatches.push("The slot isn't empty.");
+	const slot = currentMemory();
+	if (slot !== null && slot !== inner) {
+		mismatches.push(
+			inner === null
+				? "The slot isn't empty."
+				: "The slot holds an instance other than the inner call's.",
+		);
 	}
 	const next = invoke(base, unchanged);
 	mismatches.push(

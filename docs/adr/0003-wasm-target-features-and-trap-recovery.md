@@ -1,5 +1,7 @@
 # Target the wasm MVP plus bulk-memory-opt, export no mutable global, and replace the instance after any trap
 
+2026-11-01: record 0006 revises what this record says about poisoning and replacing the instance.
+
 Beyond the MVP, the module needs only `memory.copy` and `memory.fill`. `-mcpu=lime1` and clang's `generic` also enable `sign-ext`, `multivalue`, `nontrapping-fptoint`, `extended-const`, and `call-indirect-overlong`. A later clang could start to use any of them without a source change and silently raise the runtime floor, and `extended-const` already sits exactly at Safari 17.4. So the build passes `-mcpu=mvp -mbulk-memory-opt` and no other feature flag, which gives a code section byte-identical to the lime1 build. A trap leaves `__stack_pointer` where the trap happened, and after a stack overflow every later call traps. Resetting it needs an exported mutable global and wrapper code that knows the module's internals. So the module exports no mutable global, and any exception out of an export poisons the instance: the wrapper zeroes it, drops it, and instantiates the cached `WebAssembly.Module` again. SIMD stays out, because every tier of all three engines turns a `v128` `select` into a branch, and `-msimd128` gains only about 10% on keygen, 8% on verify, and nothing on sign.
 
 ## Consequences
