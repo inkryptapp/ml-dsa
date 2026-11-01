@@ -3,10 +3,10 @@
  * shares the core and the instance slot with the public API, so a test that
  * imports both entries from the source sees the instances that the public API
  * uses. It adds hooks around every export call, snapshots of memory, the
- * message representative that `verify` computes, and the calls that the
- * vectors need but the public API can't express: key generation that returns
- * the secret key, signing from a secret key, and signing and verification
- * with the internal interface or with external mu.
+ * recording switch, the message representative that `verify` computes, and
+ * the calls that the vectors need but the public API can't express: key
+ * generation that returns the secret key, signing from a secret key, and
+ * signing and verification with the internal interface or with external mu.
  *
  * @packageDocumentation
  */
@@ -46,7 +46,8 @@ import { parameterSets, seedBytes, type ObjectName, type ParameterSet } from "./
 import { messageRepresentativeBytes, publicKeyHashOffset } from "./upstream.js";
 
 export { pointer };
-export type { Region, Regions } from "./core.js";
+export { emptySlot, setRecording, testRecord } from "./core.js";
+export type { Region, Regions, TestRecord } from "./core.js";
 
 /** One call from the package into a function export, as an {@link ExportHook} sees it. */
 export interface ExportCall {

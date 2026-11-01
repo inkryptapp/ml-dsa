@@ -138,12 +138,7 @@ export const segmentTable: Readonly<Record<SegmentName, Segment>> = {
 	},
 	"output and wipe": {
 		public: true,
-		tests: [
-			{
-				file: "instance.test.ts",
-				title: "zeroes the whole wasm stack and every byte from __heap_base",
-			},
-		],
+		tests: [{ file: "exit-matrix.test.ts", title: "the exit matrix" }],
 		cases: { publicRows: 1011, testOnlyRows: 1087 },
 	},
 	"secret key from the caller": {

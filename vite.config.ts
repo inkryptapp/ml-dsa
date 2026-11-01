@@ -90,5 +90,15 @@ export default defineConfig({
 			"packages/*/check/**/*.test.ts",
 			"scripts/**/*.test.ts",
 		],
+		// The coverage gate, `pnpm run coverage`, runs the exit matrix alone. Its
+		// rows must reach every statement, branch, and function in the file
+		// that holds the core. Istanbul would insert calls into the core's
+		// call-free cleanup blocks, so the gate uses V8's own coverage.
+		coverage: {
+			provider: "v8",
+			include: ["packages/ml-dsa/src/core.ts"],
+			reporter: ["text"],
+			thresholds: { statements: 100, branches: 100, functions: 100 },
+		},
 	},
 });

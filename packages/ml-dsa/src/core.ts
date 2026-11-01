@@ -83,6 +83,13 @@ export type FunctionWrapper = (
 
 let wrapFunctions: FunctionWrapper | null = null;
 
+// The test record, which the core writes only while `recording` is on. It
+// holds the first exception that the last call caught and whether that call
+// dropped its instance. `recordedDrop` is `null` while the record is empty.
+let recording = false;
+let recordedFailure: unknown = undefined;
+let recordedDrop: boolean | null = null;
+
 /**
  * Lays out the regions in order from `heapBase`. Every region starts on the
  * SHAKE256 state's alignment, the strictest that any region needs.
@@ -129,6 +136,7 @@ export function regionBytes(instance: Instance, region: Region): Uint8Array<Arra
  * uses.
  */
 export function createInstance(): Instance {
+	/* v8 ignore if -- each entry hands the module to `initialize` while it evaluates, before any call can run */
 	if (compiled === undefined) {
 		throw new Error(messages.noModule());
 	}
@@ -185,31 +193,21 @@ export function initialize(module: WebAssembly.Module): void {
 }
 
 /**
- * The instance in the slot, or a new one if the slot is empty. A failed
- * creation fails only this call, and the next call tries again.
- */
-function instanceForCall(site: Site): Instance {
-	if (slot !== null) {
-		return slot;
-	}
-	try {
-		return createInstance();
-	} catch (cause) {
-		throw new Error(messages.failed(site), { cause });
-	}
-}
-
-/**
  * Starts the SHAKE256 state in the instance's `shakeState` region. A call's
  * work calls it in place of the init export, so the core knows whether the
  * state needs a release.
  */
 export type InitShake = () => void;
 
+/** One call's work on an instance, which the core runs inside its `try`. */
+export type Work<Output> = (instance: Instance, initShake: InitShake) => Outcome<Output>;
+
 /**
  * Runs one call's work on an instance and wipes the instance before it
  * returns or throws. Every call that uses the module runs through this
- * function.
+ * function. It runs on the instance in the slot, or creates one if the slot
+ * is empty. A failed creation fails only this call, and the next call tries
+ * again.
  *
  * On a healthy exit, it releases the SHAKE256 state if the work started one,
  * zeroes the wasm stack and `[__heap_base, end of memory)`, so memory then
@@ -218,68 +216,89 @@ export type InitShake = () => void;
  * and drops the instance, and the next call creates a new one. A status
  * outcome wipes, keeps the instance, and throws with `{ code }` as the cause.
  *
+ * The cleanup sits inline in the `finally` block, so reaching it needs no
+ * call. It makes exactly four calls, and the `catch` blocks only assign, so
+ * the wipe still runs when too little engine stack is left to start a call.
+ * `check/core-structure.ts` enforces this shape.
+ *
  * @throws Error with the failure as `cause`, if creating an instance fails, the
  * work throws, a cleanup step throws, or the work ends with a status. A status
  * stays the cause even if a cleanup step throws after it.
+ * @throws The stored exception itself, if building that `Error` fails, as it
+ * can at the engine's stack limit. After a status, which stores no exception,
+ * the error from building it propagates instead. Memory is wiped by then.
  */
-export function runCore<Output>(
-	site: Site,
-	work: (instance: Instance, initShake: InitShake) => Outcome<Output>,
-): Output {
-	const instance = instanceForCall(site);
-	slot = null;
-
-	const { memory, words, wordCount, stackLow, stackHigh, heapBase } = instance;
-	const shakeState = instance.regions.shakeState.pointer;
-	const init = instance.functions.mldsa_shake256_init;
-	const release = instance.functions.mldsa_shake256_release;
-	let shakeStarted = false;
-	const initShake: InitShake = () => {
-		init(shakeState);
-		shakeStarted = true;
-	};
-	let outcome: Outcome<Output> | null = null;
-	let poisoned = true;
+export function runCore<Output>(site: Site, work: Work<Output>): Output {
 	let failure: unknown = undefined;
-	try {
-		outcome = work(instance, initShake);
-		poisoned = false;
-	} catch (error) {
-		failure = error;
-	} finally {
-		// The release runs before the fills, so the wasm stack fill also clears
-		// its frame. A poisoned instance gets no release, because the whole-memory
-		// fill zeroes the state.
-		if (!poisoned && shakeStarted) {
-			try {
-				release(shakeState);
-			} catch (error) {
-				poisoned = true;
-				failure = error;
-			}
+	let outcome: Outcome<Output> | null = null;
+	let poisoned = false;
+	let instance = slot;
+	if (instance === null) {
+		try {
+			instance = createInstance();
+		} catch (error) {
+			failure = error;
 		}
-		if (!poisoned) {
-			try {
-				memory.fill(0, stackLow, stackHigh);
-				memory.fill(0, heapBase);
-			} catch (error) {
-				poisoned = true;
-				failure = error;
-			}
-		}
-		if (poisoned) {
-			try {
-				memory.fill(0);
-			} catch {
-				// The fallback calls no function, so it still runs when too
-				// little engine stack is left for `fill`.
-				for (let index = 0; index < wordCount; index += 1) {
-					words[index] = 0;
+	}
+	if (instance !== null) {
+		// The cleanup reads only these locals. A member read could run a getter,
+		// which can fail to start at the engine's stack limit.
+		const held = instance;
+		const { memory, words, wordCount, stackLow, stackHigh, heapBase } = held;
+		const shakeState = held.regions.shakeState.pointer;
+		const init = held.functions.mldsa_shake256_init;
+		const release = held.functions.mldsa_shake256_release;
+		let shakeStarted = false;
+		const initShake: InitShake = () => {
+			init(shakeState);
+			shakeStarted = true;
+		};
+		slot = null;
+		poisoned = true;
+		try {
+			outcome = work(held, initShake);
+			poisoned = false;
+		} catch (error) {
+			failure = error;
+		} finally {
+			// The release runs before the fills, so the wasm stack fill also clears
+			// its frame. A poisoned instance gets no release, because the whole-memory
+			// fill zeroes the state.
+			if (!poisoned && shakeStarted) {
+				try {
+					release(shakeState);
+				} catch (error) {
+					poisoned = true;
+					failure = error;
 				}
 			}
-		} else {
-			slot = instance;
+			if (!poisoned) {
+				try {
+					memory.fill(0, stackLow, stackHigh);
+					memory.fill(0, heapBase);
+				} catch (error) {
+					poisoned = true;
+					failure = error;
+				}
+			}
+			if (poisoned) {
+				try {
+					memory.fill(0);
+				} catch {
+					// The fallback calls no function, so it still runs when too
+					// little engine stack is left for `fill`.
+					for (let index = 0; index < wordCount; index += 1) {
+						words[index] = 0;
+					}
+				}
+			} else {
+				slot = held;
+			}
 		}
+	}
+	if (recording) {
+		recordedFailure = failure;
+		recordedDrop = poisoned;
 	}
 
 	// The error is built only after the cleanup, because building it can fail
@@ -288,7 +307,15 @@ export function runCore<Output>(
 		throw new Error(messages.failed(site), { cause: { code: outcome.code } });
 	}
 	if (poisoned || outcome === null) {
-		throw new Error(messages.failed(site), { cause: failure });
+		let thrown: unknown = failure;
+		try {
+			thrown = new Error(messages.failed(site), { cause: failure });
+		} catch {
+			// Building the error failed, as it can at the engine's stack limit,
+			// so the call throws the stored exception with a `throw` that makes
+			// no call.
+		}
+		throw thrown;
 	}
 	return outcome.output;
 }
@@ -307,7 +334,36 @@ export function setFunctionWrapper(wrap: FunctionWrapper): void {
 	slot = createInstance();
 }
 
-/** Test-only: empties the slot, so that the next call creates an instance. */
+/**
+ * Test-only: empties the slot, so that the next call creates an instance.
+ * Between calls, the memory of the instance in the slot equals a fresh
+ * instance's memory, so the instance that this drops holds no secret.
+ */
 export function emptySlot(): void {
 	slot = null;
+}
+
+/** What the core recorded about the last call while recording was on. */
+export interface TestRecord {
+	/** The exception that the call caught first, or `undefined` if it caught none. */
+	readonly failure: unknown;
+	/** Whether the call poisoned and dropped its instance. */
+	readonly dropped: boolean;
+}
+
+/**
+ * Test-only: turns the test record on or off. Either way, the record starts
+ * empty, so turning it off clears it.
+ */
+export function setRecording(on: boolean): void {
+	recording = on;
+	recordedFailure = undefined;
+	recordedDrop = null;
+}
+
+/** Test-only: the test record, or `null` while it is empty. */
+export function testRecord(): TestRecord | null {
+	return recordedDrop === null
+		? null
+		: Object.freeze({ failure: recordedFailure, dropped: recordedDrop });
 }

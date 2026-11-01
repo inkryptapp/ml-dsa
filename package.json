@@ -7,11 +7,13 @@
 		"check": "vp check",
 		"lint": "vp lint",
 		"typecheck": "tsc -p tsconfig.json && tsc -p packages/ml-dsa && tsc -p packages/ml-dsa/test && tsc -p packages/ml-dsa/check",
-		"test": "vp test run"
+		"test": "vp test run",
+		"coverage": "vp test run --coverage packages/ml-dsa/test/exit-matrix.test.ts"
 	},
 	"devDependencies": {
 		"@tsconfig/strictest": "2.0.8",
 		"@types/node": "22.20.5",
+		"@vitest/coverage-v8": "5.0.5",
 		"typescript": "7.0.2",
 		"vite": "npm:@voidzero-dev/vite-plus-core@1.3.0",
 		"vite-plus": "1.3.0",
