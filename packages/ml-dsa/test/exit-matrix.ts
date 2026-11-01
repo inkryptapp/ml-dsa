@@ -14,6 +14,7 @@ import {
 	type ExportCall,
 	type ExportHook,
 } from "../src/testing.js";
+import { pausedAt } from "./debugger-pauses.js";
 import { firstDifference, regionOf } from "./helpers.js";
 import {
 	type Base,
@@ -34,6 +35,7 @@ import {
 	resultMismatches,
 	runHooked,
 	slotMemory,
+	zeroedByInnerCall,
 	unchanged,
 } from "./exit-helpers.js";
 import {
@@ -105,7 +107,7 @@ function trapError(call: ExportCall): unknown {
 
 function generatedMismatches(row: GeneratedRow, recording: boolean): readonly string[] {
 	const { base, fault } = row;
-	const checkedOut = slotMemory();
+	const held = slotMemory();
 	const mismatches: string[] = [];
 	let injected: unknown = undefined;
 	const result = runHooked(
@@ -129,11 +131,11 @@ function generatedMismatches(row: GeneratedRow, recording: boolean): readonly st
 	if (fault.kind === "status") {
 		const expected = failedCall(base, { kind: "code", code: injectedStatus(row.exportName) });
 		mismatches.push(...recordMismatches(recording, kept));
-		return [...mismatches, ...healthyMismatches(base, checkedOut, result, expected)];
+		return [...mismatches, ...healthyMismatches(base, held, result, expected)];
 	}
 	mismatches.push(...recordMismatches(recording, droppedAfter(injected)));
 	const expected = failedCall(base, { kind: "exactly", value: injected });
-	return [...mismatches, ...poisonedMismatches(base, checkedOut, result, expected)];
+	return [...mismatches, ...poisonedMismatches(base, held, result, expected)];
 }
 
 /** A copy of `bytes` on a resizable buffer, which every byte input rejects. */
@@ -308,24 +310,33 @@ function lastExportCall(base: Base): number {
 }
 
 /**
- * Runs `action` while every `Uint8Array` fill throws `error`, from the moment
- * `arm` runs. `arm` defines an own `fill` on `Uint8Array.prototype`, which
- * shadows the `fill` that it inherits from `%TypedArray%.prototype`, so
- * deleting that own property puts the real `fill` back.
+ * Runs `action` while every `Uint8Array` fill and every `WeakSet` lookup
+ * throws `error`, as both can when too little engine stack is left to start
+ * them, from the moment `arm` runs. `arm` defines an own `fill` on
+ * `Uint8Array.prototype`, which shadows the `fill` that it inherits from
+ * `%TypedArray%.prototype`, so deleting that own property puts the real
+ * `fill` back.
  */
-function withThrowingFills(error: Error, action: (arm: () => void) => Result): Result {
+function withThrowingFillsAndLookups(error: Error, action: (arm: () => void) => Result): Result {
+	const has = Reflect.getOwnPropertyDescriptor(WeakSet.prototype, "has");
+	const throwing = {
+		value: () => {
+			throw error;
+		},
+	};
 	const arm = (): void => {
-		Reflect.defineProperty(Uint8Array.prototype, "fill", {
-			configurable: true,
-			value: () => {
-				throw error;
-			},
-		});
+		Reflect.defineProperty(Uint8Array.prototype, "fill", { configurable: true, ...throwing });
+		if (has !== undefined) {
+			Reflect.defineProperty(WeakSet.prototype, "has", { ...has, ...throwing });
+		}
 	};
 	try {
 		return action(arm);
 	} finally {
 		Reflect.deleteProperty(Uint8Array.prototype, "fill");
+		if (has !== undefined) {
+			Reflect.defineProperty(WeakSet.prototype, "has", has);
+		}
 	}
 }
 
@@ -358,7 +369,7 @@ function listedMismatches(row: ListedRow, recording: boolean): readonly string[]
 			return failedCreationMismatches(row, recording);
 		case "rejected verify": {
 			const base: Base = { objectName: row.objectName, operation: "verify", shape: "one chunk" };
-			const checkedOut = slotMemory();
+			const held = slotMemory();
 			const { signature } = inputsOf(base);
 			const result = runHooked(painting(proceed), () =>
 				invoke(base, (options) => ({
@@ -368,11 +379,11 @@ function listedMismatches(row: ListedRow, recording: boolean): readonly string[]
 			);
 			return [
 				...recordMismatches(recording, kept),
-				...healthyMismatches(base, checkedOut, result, { kind: "false" }),
+				...healthyMismatches(base, held, result, { kind: "false" }),
 			];
 		}
 		case "status, then a throwing release": {
-			const checkedOut = slotMemory();
+			const held = slotMemory();
 			const injected = new RangeError("release");
 			// The mismatches about what happened during the call: the inputs at
 			// the release, and the export calls after the status.
@@ -413,7 +424,7 @@ function listedMismatches(row: ListedRow, recording: boolean): readonly string[]
 				...recordMismatches(recording, droppedAfter(injected)),
 				...poisonedMismatches(
 					row.base,
-					checkedOut,
+					held,
 					result,
 					failedCall(row.base, { kind: "code", code: injectedStatus(statusExport) }),
 				),
@@ -421,11 +432,11 @@ function listedMismatches(row: ListedRow, recording: boolean): readonly string[]
 		}
 		case "throwing fills": {
 			const last = lastExportCall(row.base);
-			const checkedOut = slotMemory();
+			const held = slotMemory();
 			const fillError = new RangeError("fill");
 			const injected = new RangeError("injected");
 			const duringCall: string[] = [];
-			const result = withThrowingFills(fillError, (arm) =>
+			const result = withThrowingFillsAndLookups(fillError, (arm) =>
 				runHooked(
 					painting((call, index) => {
 						const proceeded = call.proceed();
@@ -447,14 +458,14 @@ function listedMismatches(row: ListedRow, recording: boolean): readonly string[]
 				...recordMismatches(recording, droppedAfter(first)),
 				...poisonedMismatches(
 					row.base,
-					checkedOut,
+					held,
 					result,
 					failedCall(row.base, { kind: "exactly", value: first }),
 				),
 			];
 		}
 		case "throwing Error constructor": {
-			const checkedOut = slotMemory();
+			const held = slotMemory();
 			const constructionError = new RangeError("construction");
 			const injected = new RangeError("injected");
 			const duringCall: string[] = [];
@@ -479,7 +490,7 @@ function listedMismatches(row: ListedRow, recording: boolean): readonly string[]
 				return [
 					...duringCall,
 					...recordMismatches(recording, kept),
-					...healthyMismatches(row.base, checkedOut, result, {
+					...healthyMismatches(row.base, held, result, {
 						kind: "thrown",
 						error: constructionError,
 					}),
@@ -488,13 +499,15 @@ function listedMismatches(row: ListedRow, recording: boolean): readonly string[]
 			return [
 				...duringCall,
 				...recordMismatches(recording, droppedAfter(injected)),
-				...poisonedMismatches(row.base, checkedOut, result, { kind: "thrown", error: injected }),
+				...poisonedMismatches(row.base, held, result, { kind: "thrown", error: injected }),
 			];
 		}
 		case "getter":
 			return getterMismatches(row, recording);
 		case "public call from an export hook":
 			return callFromHookMismatches(row, recording);
+		case "public call from a debugger pause":
+			return debuggerPauseMismatches(row, recording);
 	}
 }
 
@@ -558,49 +571,131 @@ function getterMismatches(
 	mismatches.push(...recordMismatches(recording, kept));
 	// After a nested trap, the outer call runs on the new instance that it
 	// creates, so the slot holds no instance from before the call.
-	const checkedOut = row.nested === "trap" ? null : before;
+	const held = row.nested === "trap" ? null : before;
 	if (row.nested === "trap" && currentMemory() === before) {
 		mismatches.push("The slot still holds the instance that the nested trap dropped.");
 	}
-	return [...mismatches, ...healthyMismatches(row.base, checkedOut, result, { kind: "reference" })];
+	return [...mismatches, ...healthyMismatches(row.base, held, result, { kind: "reference" })];
+}
+
+/** What an inner call returned, and the memory of the instance that it ran on. */
+interface InnerCall {
+	readonly result: Result;
+	readonly memory: Uint8Array | null;
+}
+
+/** The base of every inner call: a public sign with a one-chunk message. */
+function innerSignBase(objectName: ObjectName): Base {
+	return { objectName, operation: "sign", shape: "one chunk" };
+}
+
+/**
+ * Runs a public sign while the outer call holds its instance, as a call from
+ * a debugger console would, then sets the export hook back to `outerHook`.
+ */
+function innerSign(objectName: ObjectName, outerHook: ExportHook): InnerCall {
+	let memory: Uint8Array | null = null;
+	setExportHook((call) => {
+		memory = call.memory;
+		return call.proceed();
+	});
+	const result = invoke(innerSignBase(objectName), unchanged);
+	setExportHook(outerHook);
+	return { result, memory };
+}
+
+/**
+ * Checks a row in which an inner call zeroed the instance that the outer
+ * call held: the inner call's output and its own wiped instance, the record,
+ * and then the poisoned helper's checks of the outer call.
+ */
+function innerCallMismatches(
+	base: Base,
+	held: Uint8Array<ArrayBuffer>,
+	result: Result,
+	inner: InnerCall | null,
+	recording: boolean,
+): readonly string[] {
+	if (inner === null || inner.memory === null) {
+		return ["The inner call never ran."];
+	}
+	const innerBase = innerSignBase(base.objectName);
+	const mismatches = resultMismatches(innerBase, inner.result, { kind: "reference" }).map(
+		(mismatch) => `Inner: ${mismatch}`,
+	);
+	if (inner.memory === held) {
+		mismatches.push("The inner call ran on the instance that the outer call held.");
+	}
+	if (firstDifference(inner.memory, freshMemory) !== null) {
+		mismatches.push("The inner call's instance differs from a fresh instance.");
+	}
+	return [
+		...mismatches,
+		...recordMismatches(recording, zeroedByInnerCall),
+		...poisonedMismatches(
+			base,
+			held,
+			result,
+			failedCall(base, { kind: "exactly", value: undefined }),
+			inner.memory,
+		),
+	];
 }
 
 function callFromHookMismatches(
 	row: Extract<ListedRow, { kind: "public call from an export hook" }>,
 	recording: boolean,
 ): readonly string[] {
-	const checkedOut = slotMemory();
+	const held = slotMemory();
 	const mismatches: string[] = [];
-	const innerBase: Base = { ...row.base, operation: "sign" };
-	const inner: { memory?: Uint8Array; result?: Result } = {};
+	const taken: { inner: InnerCall | null } = { inner: null };
+	const workEnd = exportCallsOf(row.base).findLastIndex(
+		(name) => name !== "mldsa_shake256_release",
+	);
 	const hook = painting((call, index) => {
-		if (index === 0 && inner.result === undefined) {
-			setExportHook((innerCall) => {
-				inner.memory = innerCall.memory;
-				return innerCall.proceed();
-			});
-			inner.result = invoke(innerBase, unchanged);
-			setExportHook(hook);
+		const proceeded = call.proceed();
+		const reached =
+			row.at === "the release" ? call.name === "mldsa_shake256_release" : index === workEnd;
+		if (!reached || taken.inner !== null) {
+			return proceeded;
 		}
-		return call.proceed();
+		mismatches.push(...inputsInPlace(row.base, call.memory));
+		taken.inner = innerSign(row.base.objectName, hook);
+		// A debugger can pause the outer call inside an export, which then goes
+		// on writing after the inner call returns. The paint stands in for those
+		// writes, so the row passes only if the outer call zeroes its instance
+		// again.
+		call.memory.fill(paint);
+		return proceeded;
 	});
 	const result = runHooked(hook, () => invoke(row.base, unchanged));
-	if (inner.result === undefined || inner.memory === undefined) {
-		mismatches.push("The hook never ran the inner call.");
-	} else {
-		mismatches.push(
-			...resultMismatches(innerBase, inner.result, { kind: "reference" }).map(
-				(mismatch) => `Inner: ${mismatch}`,
-			),
-		);
-		if (inner.memory === checkedOut || firstDifference(inner.memory, freshMemory) !== null) {
-			mismatches.push("The inner call didn't run on a new instance that it then wiped.");
-		}
+	// Before the cleanup starts, the outer call puts nothing back, so the slot
+	// keeps the inner call's instance.
+	const { inner } = taken;
+	if (row.at !== "the release" && inner !== null && currentMemory() !== inner.memory) {
+		mismatches.push("The slot doesn't hold the inner call's instance.");
 	}
+	return [...mismatches, ...innerCallMismatches(row.base, held, result, inner, recording)];
+}
+
+function debuggerPauseMismatches(
+	row: Extract<ListedRow, { kind: "public call from a debugger pause" }>,
+	recording: boolean,
+): readonly string[] {
+	const held = slotMemory();
+	const hook = painting(proceed);
+	const taken: { inner: InnerCall | null } = { inner: null };
+	const { value: result, paused } = pausedAt(
+		row.point,
+		() => {
+			taken.inner = innerSign(row.base.objectName, hook);
+			held.fill(paint);
+		},
+		() => runHooked(hook, () => invoke(row.base, unchanged)),
+	);
 	return [
-		...mismatches,
-		...recordMismatches(recording, kept),
-		...healthyMismatches(row.base, checkedOut, result, { kind: "reference" }),
+		...(paused ? [] : ["The outer call never paused there."]),
+		...innerCallMismatches(row.base, held, result, taken.inner, recording),
 	];
 }
 

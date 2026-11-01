@@ -75,6 +75,13 @@ let compiled: WebAssembly.Module | undefined = undefined;
 // create one.
 let slot: Instance | null = null;
 
+// The instance that a call holds, or that a stopped call left, or `null`.
+let checkedOut: Instance | null = null;
+
+// Every instance that a call zeroed because another call held it. Its static
+// data is zero too, so no call may run on it again.
+const zeroed = new WeakSet<Instance>();
+
 /** Wraps the export functions of a new instance, for the test-only entry point's hooks. */
 export type FunctionWrapper = (
 	functions: ModuleFunctions,
@@ -209,6 +216,14 @@ export type Work<Output> = (instance: Instance, initShake: InitShake) => Outcome
  * is empty. A failed creation fails only this call, and the next call tries
  * again.
  *
+ * While a call holds an instance, `checkedOut` names it and the slot is
+ * empty. If the runtime stops a call midway, its cleanup never runs and
+ * `checkedOut` stays set. The next call then zeroes that instance's whole
+ * memory and runs on a new instance. An inner call, which a debugger or an
+ * export hook starts while another call holds the instance, takes the same
+ * path. The outer call then poisons, wherever it was paused, and no call runs
+ * on the zeroed instance again.
+ *
  * On a healthy exit, it releases the SHAKE256 state if the work started one,
  * zeroes the wasm stack and `[__heap_base, end of memory)`, so memory then
  * equals a fresh instance's memory, and puts the instance back. Any exception
@@ -223,16 +238,36 @@ export type Work<Output> = (instance: Instance, initShake: InitShake) => Outcome
  *
  * @throws Error with the failure as `cause`, if creating an instance fails, the
  * work throws, a cleanup step throws, or the work ends with a status. A status
- * stays the cause even if a cleanup step throws after it.
+ * stays the cause even if a cleanup step throws after it. If an inner call
+ * zeroed this call's instance, and this call caught no exception and ended
+ * with no status, the cause is `undefined`.
  * @throws The stored exception itself, if building that `Error` fails, as it
  * can at the engine's stack limit. After a status, which stores no exception,
  * the error from building it propagates instead. Memory is wiped by then.
+ * @throws The engine's own stack-overflow error, if a call before checkout or
+ * right after a healthy cleanup fails to start. Before checkout, the recovery
+ * of a stranded instance can fail before it zeroes the instance, so that
+ * instance's memory may stay unzeroed, with `checkedOut` still set for the
+ * next call. Right after a healthy cleanup, the lookup of this call's
+ * instance among the zeroed instances, or the fill after an inner call zeroed
+ * it, can fail, and memory is wiped by then.
  */
 export function runCore<Output>(site: Site, work: Work<Output>): Output {
 	let failure: unknown = undefined;
 	let outcome: Outcome<Output> | null = null;
 	let poisoned = false;
-	let instance = slot;
+	const stranded = checkedOut;
+	if (stranded !== null) {
+		// The call that holds this instance may have written secrets to it. The
+		// mark comes first, so a fill that fails to start at the engine's stack
+		// limit still leaves the instance marked.
+		zeroed.add(stranded);
+		stranded.memory.fill(0);
+		checkedOut = null;
+	}
+	// A call that a debugger paused in its cleanup can put back an instance
+	// that a call made from the debugger zeroed.
+	let instance = slot !== null && zeroed.has(slot) ? null : slot;
 	if (instance === null) {
 		try {
 			instance = createInstance();
@@ -253,6 +288,7 @@ export function runCore<Output>(site: Site, work: Work<Output>): Output {
 			init(shakeState);
 			shakeStarted = true;
 		};
+		checkedOut = held;
 		slot = null;
 		poisoned = true;
 		try {
@@ -261,6 +297,11 @@ export function runCore<Output>(site: Site, work: Work<Output>): Output {
 		} catch (error) {
 			failure = error;
 		} finally {
+			// An inner call, from a debugger or an export hook, found `checkedOut`
+			// set and zeroed this instance.
+			if (checkedOut !== held) {
+				poisoned = true;
+			}
 			// The release runs before the fills, so the wasm stack fill also clears
 			// its frame. A poisoned instance gets no release, because the whole-memory
 			// fill zeroes the state.
@@ -291,9 +332,28 @@ export function runCore<Output>(site: Site, work: Work<Output>): Output {
 						words[index] = 0;
 					}
 				}
-			} else {
+			}
+			// These two statements come last, so a call that the runtime stops
+			// anywhere above leaves `checkedOut` set for the next call. The clear
+			// skips the instance of a stopped call that ran inside this one.
+			if (!poisoned) {
 				slot = held;
 			}
+			if (checkedOut === held) {
+				checkedOut = null;
+			}
+		}
+		// After a healthy cleanup, an inner call that ran in the release or at a
+		// debugger pause, after the first check, can have zeroed this instance.
+		// This call may have written to it since and put it back in the slot. A
+		// poisoned call needs no check, because it zeroed its whole memory and put
+		// nothing back.
+		if (!poisoned && zeroed.has(held)) {
+			poisoned = true;
+			if (slot === held) {
+				slot = null;
+			}
+			memory.fill(0);
 		}
 	}
 	if (recording) {
@@ -323,6 +383,11 @@ export function runCore<Output>(site: Site, work: Work<Output>): Output {
 /** Test-only: the instance in the slot, or `null` while a call holds it or after a drop. */
 export function currentInstance(): Instance | null {
 	return slot;
+}
+
+/** Test-only: the instance that a call holds, or that a stopped call left, or `null`. */
+export function checkedOutInstance(): Instance | null {
+	return checkedOut;
 }
 
 /**

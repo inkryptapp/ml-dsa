@@ -16,6 +16,7 @@ import "./index.js";
 import { pointer } from "./brand.js";
 import { checkBytes, checkContext, checkExactBytes, checkRandomness } from "./bytes.js";
 import {
+	checkedOutInstance,
 	createInstance,
 	currentInstance,
 	emptySlot,
@@ -235,6 +236,14 @@ export function failNextCreation(error: unknown): void {
  */
 export function currentMemory(): Uint8Array<ArrayBuffer> | null {
 	return currentInstance()?.memory ?? null;
+}
+
+/**
+ * The live memory of the instance that a call holds, or that a stopped call
+ * left, or `null` while no call holds one.
+ */
+export function checkedOutMemory(): Uint8Array<ArrayBuffer> | null {
+	return checkedOutInstance()?.memory ?? null;
 }
 
 /**

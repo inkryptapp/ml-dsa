@@ -102,9 +102,49 @@ _Avoid_: transpiled module, wasm blob
 
 ### Memory
 
+**Instance**:
+One instantiation of the wasm module, with a linear memory of its own. Every call runs on one instance.
+_Avoid_: module (for an instance), sandbox
+
 **Wasm stack**:
-The C call stack that lives inside the wasm module's linear memory. It excludes the engine's own machine stack and registers.
+The C call stack that lives inside an instance's linear memory. It excludes the engine's own machine stack and registers.
 _Avoid_: shadow stack, the stack
+
+**Static data**:
+The module's constants and initialized data, which sit in an instance's linear memory between the wasm stack and the regions.
+_Avoid_: data section (the module's bytes), globals
+
+**Region**:
+A fixed run of an instance's linear memory that holds one input, output, or intermediate value of a call.
+_Avoid_: buffer, slot
+
+**Healthy instance**:
+An instance whose memory equals a fresh instance's memory between calls, so the next call can run on it.
+_Avoid_: clean instance, valid instance
+
+**Poisoned instance**:
+An instance that a call held when an exception was thrown, or that an inner call zeroed. The call that held it zeroes its whole memory and drops it.
+_Avoid_: broken instance, dirty instance
+
+**Wipe**:
+The zeroing that ends every call: the wasm stack and every byte after the static data on a healthy instance, or the whole memory of a poisoned instance.
+_Avoid_: clear, scrub, zeroize (which upstream zeroization does)
+
+**Inner call**:
+A call that a debugger or an export hook starts while another call, the outer call, holds the instance. After its input checks, it zeroes the outer call's instance and runs on a new one.
+_Avoid_: re-entrant call, takeover
+
+**Stopped call**:
+A call that the runtime stopped midway, so none of its cleanup ran, as on a `vm` timeout or a debugger's terminate command.
+_Avoid_: aborted call, interrupted call, killed call
+
+**Recovery**:
+The replacement of an instance that a call can't trust with a new one: after a poisoned instance, or after a stopped call, whose instance the next call zeroes first.
+_Avoid_: reset, restart
+
+**Upstream zeroization**:
+Upstream's own zeroing of the secret buffers that it frees. The package keeps it unchanged and relies on its own wipe instead.
+_Avoid_: wipe (which is the package's own)
 
 ### Package surface
 

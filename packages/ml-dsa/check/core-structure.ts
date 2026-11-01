@@ -15,11 +15,24 @@
  * - In the third `try` statement's `catch` block, the fallback loop: `for
  *   (let i = 0; i < bound; i += 1)`, whose body only stores `0` into a `const`
  *   local at `i`.
- * - Assignments of a name or a literal to `failure`, `poisoned`, or `slot`.
+ * - Assignments of a name or a literal to `failure` or `poisoned`.
  * - A `catch` binding that is a single name, or none. A destructured binding
  *   reads the error's properties.
  * - `if` statements in the `finally` block, whose conditions read names and
  *   literals with `!`, `&&`, `||`, `===`, and `!==` only.
+ * - The three `checkedOut` statements of the `finally` block, which name the
+ *   call's instance. The block's first statement is the first check, `if
+ *   (checkedOut !== held) { poisoned = true; }`, which appears once. The
+ *   block's last two statements are the put-back, `if (!poisoned) { slot =
+ *   held; }`, and the clear, `if (checkedOut === held) { checkedOut = null;
+ *   }`. No other statement reads `checkedOut` in a condition or assigns it or
+ *   the slot.
+ *
+ * Here `held` stands for the name in the core's one checkout, `checkedOut =
+ * held`, outside the `catch` and `finally` blocks, and `slot = null` must
+ * follow that checkout directly. These rules keep `checkedOut` set until the
+ * last statement of a call's `finally` block, so the next call finds the
+ * instance of a stopped call.
  *
  * Anything else fails the check, any other call, `new`, or member read
  * included. The rules catch the code that an author adds by mistake, such as
@@ -32,8 +45,17 @@ import { parseAst } from "vite/rolldown/parseAst";
 /** The name of the core function, which appears exactly once in the source. */
 const coreFunction = "runCore";
 
-/** The bindings that a `catch` or `finally` block of the core may assign. */
-const assignable = new Set(["failure", "poisoned", "slot"]);
+/** The bindings that a `catch` or `finally` block of the core may assign anywhere. */
+const assignable = new Set(["failure", "poisoned"]);
+
+/**
+ * The bindings that the core's `catch` and `finally` blocks may assign in one
+ * statement only, each mapped to the name of that statement.
+ */
+const placed: ReadonlyMap<string, string> = new Map([
+	["slot", "the put-back"],
+	["checkedOut", "the clear of `checkedOut`"],
+]);
 
 /** An ESTree node, with the offset of its first character. */
 interface Node {
@@ -110,6 +132,65 @@ function boundNames(pattern: Node | null): readonly string[] {
 /** One of the four calls that the cleanup may make. */
 type DesignatedCall = "release" | "fill";
 
+/** One of the three `checkedOut` statements of the `finally` block, which the file's header lists. */
+type CheckoutStatement = "first check" | "put-back" | "clear";
+
+/** The right-hand side of `statement` if it is `target = value;`, or `null`. */
+function assignedValue(statement: Node | undefined, target: string): Node | null {
+	const expression =
+		statement?.type === "ExpressionStatement" ? child(statement, "expression") : null;
+	return expression?.type === "AssignmentExpression" &&
+		field(expression, "operator") === "=" &&
+		nameOf(child(expression, "left")) === target
+		? child(expression, "right")
+		: null;
+}
+
+/** Whether `node` is the literal whose source text is `raw`, such as `true` or `null`. */
+function isRaw(node: Node | null, raw: string): boolean {
+	return node?.type === "Literal" && field(node, "raw") === raw;
+}
+
+/** Whether `node` is `checkedOut <operator> held`. */
+function comparesHeld(node: Node | null, operator: string, held: string): boolean {
+	return (
+		node?.type === "BinaryExpression" &&
+		field(node, "operator") === operator &&
+		nameOf(child(node, "left")) === "checkedOut" &&
+		nameOf(child(node, "right")) === held
+	);
+}
+
+/** Which of the three `checkedOut` statements `node` is, for the call's instance `held`, or `null`. */
+function checkoutStatement(node: Node, held: string | null): CheckoutStatement | null {
+	const test = child(node, "test");
+	const consequent = child(node, "consequent");
+	const body = consequent?.type === "BlockStatement" ? children(consequent, "body") : [];
+	const [only] = body;
+	if (held === null || child(node, "alternate") !== null || body.length !== 1) {
+		return null;
+	}
+	if (comparesHeld(test, "!==", held) && isRaw(assignedValue(only, "poisoned"), "true")) {
+		return "first check";
+	}
+	if (comparesHeld(test, "===", held) && isRaw(assignedValue(only, "checkedOut"), "null")) {
+		return "clear";
+	}
+	const negated = test?.type === "UnaryExpression" && field(test, "operator") === "!";
+	if (
+		negated &&
+		nameOf(child(test, "argument")) === "poisoned" &&
+		nameOf(assignedValue(only, "slot")) === held
+	) {
+		return "put-back";
+	}
+	return null;
+}
+
+function readsCheckedOut(node: Node | null): boolean {
+	return node !== null && [...walk(node)].some((inner) => nameOf(inner) === "checkedOut");
+}
+
 /** Where in the core a node sits. */
 interface Context {
 	readonly region: "catch" | "finally";
@@ -124,13 +205,18 @@ class Checker {
 	readonly #file: string;
 	readonly #lineStarts: readonly number[];
 	readonly #constLocals: ReadonlySet<string>;
+	/** The name of the call's instance, which the checkout assigns to `checkedOut`. */
+	readonly #held: string | null;
 	/** The calls in the `try` block of each `try` statement of the `finally` block. */
 	readonly calls: DesignatedCall[][] = [];
+	/** The `checkedOut` statements of the `finally` block, by node. */
+	readonly checkoutStatements = new Map<Node, CheckoutStatement>();
 
-	constructor(file: string, source: string, constLocals: ReadonlySet<string>) {
+	constructor(file: string, source: string, constLocals: ReadonlySet<string>, held: string | null) {
 		this.#file = file;
 		this.#lineStarts = [0, ...[...source.matchAll(/\n/gu)].map((match) => match.index + 1)];
 		this.#constLocals = constLocals;
+		this.#held = held;
 	}
 
 	fail(node: Node, message: string): void {
@@ -196,9 +282,21 @@ class Checker {
 				}
 				return;
 			}
-			case "IfStatement":
+			case "IfStatement": {
 				if (context.region !== "finally") {
 					this.#refuse(node, context, "an `if` statement");
+					return;
+				}
+				const kind = checkoutStatement(node, this.#held);
+				if (kind !== null) {
+					this.checkoutStatements.set(node, kind);
+					return;
+				}
+				if (readsCheckedOut(child(node, "test"))) {
+					this.fail(
+						node,
+						`the core's finally block holds an \`if\` on \`checkedOut\` that is neither \`if (checkedOut !== ${this.#held ?? "held"}) { poisoned = true; }\` nor the clear of \`checkedOut\`.`,
+					);
 					return;
 				}
 				this.#condition(child(node, "test"), context);
@@ -208,6 +306,7 @@ class Checker {
 					}
 				}
 				return;
+			}
 			case "TryStatement":
 				this.#tryStatement(node, context);
 				return;
@@ -278,6 +377,14 @@ class Checker {
 		}
 		const target = nameOf(child(node, "left"));
 		const value = child(node, "right");
+		const place = target === null ? undefined : placed.get(target);
+		if (place !== undefined) {
+			this.fail(
+				node,
+				`the core's ${context.region} block assigns \`${target ?? ""}\` outside ${place}.`,
+			);
+			return;
+		}
 		if (field(node, "operator") !== "=" || target === null || !assignable.has(target)) {
 			this.#refuse(node, context, `an assignment to \`${target ?? "a member"}\``);
 			return;
@@ -414,17 +521,38 @@ export function coreStructureFailures(file: string, source: string): readonly st
 			.flatMap((node) => children(node, "declarations"))
 			.flatMap((declarator) => boundNames(child(declarator, "id"))),
 	);
-	const checker = new Checker(file, source, constLocals);
 	const tries = [...walk(core)].filter((node) => node.type === "TryStatement");
-	// The checker walks each `catch` and `finally` block whole, so it starts
-	// only from the `try` statements that no such block holds.
-	const nested = new Set(
+	// Every node of the core's `catch` and `finally` blocks.
+	const cleanup = new Set(
 		tries
 			.flatMap((node) => [child(node, "handler"), child(node, "finalizer")])
-			.flatMap((block) => (block === null ? [] : [...walk(block)].slice(1))),
+			.flatMap((block) => (block === null ? [] : [...walk(block)])),
 	);
+	const checkouts = [...walk(core)].flatMap((node) => {
+		const body = cleanup.has(node) ? [] : children(node, "body");
+		return body.flatMap((statement, index) => {
+			const held = nameOf(assignedValue(statement, "checkedOut"));
+			return held === null ? [] : [{ statement, held, next: body[index + 1] }];
+		});
+	});
+	const [checkout] = checkouts;
+	const held = checkouts.length === 1 && checkout !== undefined ? checkout.held : null;
+	const checker = new Checker(file, source, constLocals, held);
+	if (checkout === undefined || held === null) {
+		checker.fail(
+			core,
+			`${coreFunction} holds ${checkouts.length} checkouts, \`checkedOut = <instance>;\`, instead of one.`,
+		);
+	} else if (!isRaw(assignedValue(checkout.next, "slot"), "null")) {
+		checker.fail(
+			checkout.statement,
+			`the checkout \`checkedOut = ${held};\` isn't directly followed by \`slot = null;\`.`,
+		);
+	}
+	// The checker walks each `catch` and `finally` block whole, so it starts
+	// only from the `try` statements that no such block holds.
 	const finallyBlocks: Node[] = [];
-	for (const node of tries.filter((candidate) => !nested.has(candidate))) {
+	for (const node of tries.filter((candidate) => !cleanup.has(candidate))) {
 		checker.catchClause(node, { region: "catch", tryIndex: null, fallback: false });
 		const finalizer = child(node, "finalizer");
 		if (finalizer !== null) {
@@ -437,6 +565,31 @@ export function coreStructureFailures(file: string, source: string): readonly st
 			core,
 			`${coreFunction} holds ${finallyBlocks.length} \`finally\` blocks instead of one.`,
 		);
+	}
+	const [finalizer] = finallyBlocks;
+	if (finallyBlocks.length === 1 && finalizer !== undefined && held !== null) {
+		const statements = children(finalizer, "body");
+		const kindOf = (node: Node | undefined): CheckoutStatement | null =>
+			node === undefined ? null : (checker.checkoutStatements.get(node) ?? null);
+		const count = (kind: CheckoutStatement): number =>
+			[...checker.checkoutStatements.values()].filter((candidate) => candidate === kind).length;
+		if (kindOf(statements[0]) !== "first check" || count("first check") !== 1) {
+			checker.fail(
+				finalizer,
+				`the core's finally block doesn't start with \`if (checkedOut !== ${held}) { poisoned = true; }\`, or holds that check twice.`,
+			);
+		}
+		if (
+			kindOf(statements.at(-2)) !== "put-back" ||
+			kindOf(statements.at(-1)) !== "clear" ||
+			count("put-back") !== 1 ||
+			count("clear") !== 1
+		) {
+			checker.fail(
+				finalizer,
+				`the core's finally block doesn't end with the put-back, \`if (!poisoned) { slot = ${held}; }\`, and then \`if (checkedOut === ${held}) { checkedOut = null; }\`.`,
+			);
+		}
 	}
 	const found = JSON.stringify(checker.calls);
 	if (found !== JSON.stringify(designatedCalls)) {

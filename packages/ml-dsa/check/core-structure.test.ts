@@ -168,8 +168,79 @@ describe("the structural check of the core", () => {
 			`${file}:${finallyLine(fifth)}: the \`try\` statements of the \`finally\` block hold the calls [["release","release"],["fill","fill"],["fill"]] instead of [["release"],["fill","fill"],["fill"]].`,
 		]);
 		expect(coreStructureFailures(file, outside)).toStrictEqual([
-			`${file}:${lineOf(outside, wholeFill.trim())}: the core's finally block holds a call outside the four designated calls, ${stackEdge}`,
+			`${file}:${lineOf(outside, wholeFill)}: the core's finally block holds a call outside the four designated calls, ${stackEdge}`,
 			`${file}:${finallyLine(outside)}: the \`try\` statements of the \`finally\` block hold the calls [["release"],["fill","fill"],[]] instead of [["release"],["fill","fill"],["fill"]].`,
+		]);
+	});
+
+	const checkout = "\t\tcheckedOut = held;\n\t\tslot = null;\n";
+	const firstCheck = "\t\t\tif (checkedOut !== held) {\n\t\t\t\tpoisoned = true;\n\t\t\t}\n";
+	const putBack = "\t\t\tif (!poisoned) {\n\t\t\t\tslot = held;\n\t\t\t}\n";
+	const clear = "\t\t\tif (checkedOut === held) {\n\t\t\t\tcheckedOut = null;\n\t\t\t}\n";
+	const otherIf =
+		"the core's finally block holds an `if` on `checkedOut` that is neither `if (checkedOut !== held) { poisoned = true; }` nor the clear of `checkedOut`.";
+	const firstStatement =
+		"the core's finally block doesn't start with `if (checkedOut !== held) { poisoned = true; }`, or holds that check twice.";
+	const lastTwo =
+		"the core's finally block doesn't end with the put-back, `if (!poisoned) { slot = held; }`, and then `if (checkedOut === held) { checkedOut = null; }`.";
+
+	test("fails unless the finally block starts with its one check of `checkedOut !== held`", () => {
+		const missing = changed(firstCheck, "");
+		const repeated = changed(firstCheck, `${firstCheck}${firstCheck}`);
+		for (const broken of [missing, repeated]) {
+			expect(coreStructureFailures(file, broken)).toStrictEqual([
+				`${file}:${lineOf(broken, "} finally {")}: ${firstStatement}`,
+			]);
+		}
+	});
+
+	test("fails on a comparison of `checkedOut` with a binding other than the call's instance", () => {
+		const broken = changed(firstCheck, firstCheck.replace("!== held", "!== memory"));
+		expect(coreStructureFailures(file, broken)).toStrictEqual([
+			`${file}:${lineOf(broken, "checkedOut !== memory")}: ${otherIf}`,
+			`${file}:${lineOf(broken, "} finally {")}: ${firstStatement}`,
+		]);
+	});
+
+	test("fails unless the put-back and the clear of `checkedOut` are the last two statements", () => {
+		const swapped = changed(`${putBack}${clear}`, `${clear}${putBack}`);
+		const early = changed(`${putBack}${clear}`, "").replace(
+			"\t\t\tif (poisoned) {\n",
+			`${putBack}${clear}\t\t\tif (poisoned) {\n`,
+		);
+		for (const broken of [swapped, early]) {
+			expect(coreStructureFailures(file, broken)).toStrictEqual([
+				`${file}:${lineOf(broken, "} finally {")}: ${lastTwo}`,
+			]);
+		}
+	});
+
+	test("fails when the clear sets `checkedOut` to anything but null", () => {
+		const broken = changed(clear, clear.replace("checkedOut = null", "checkedOut = held"));
+		expect(coreStructureFailures(file, broken)).toStrictEqual([
+			`${file}:${lineOf(broken, "checkedOut === held")}: ${otherIf}`,
+			`${file}:${lineOf(broken, "} finally {")}: ${lastTwo}`,
+		]);
+	});
+
+	test.each([
+		["slot = held", "the put-back"],
+		["checkedOut = null", "the clear of `checkedOut`"],
+	])("fails on `%s` outside %s", (assignment, place) => {
+		const broken = changed(firstCatch, `${firstCatch}\t\t\t${assignment};\n`);
+		const target = assignment.split(" ")[0] ?? "";
+		expect(coreStructureFailures(file, broken)).toStrictEqual([
+			`${file}:${lineOf(broken, `\t\t\t${assignment};`)}: the core's catch block assigns \`${target}\` outside ${place}.`,
+		]);
+	});
+
+	test("fails unless `slot = null` directly follows the checkout", () => {
+		const broken = changed(
+			checkout,
+			"\t\tcheckedOut = held;\n\t\tpoisoned = true;\n\t\tslot = null;\n",
+		);
+		expect(coreStructureFailures(file, broken)).toStrictEqual([
+			`${file}:${lineOf(broken, "checkedOut = held;")}: the checkout \`checkedOut = held;\` isn't directly followed by \`slot = null;\`.`,
 		]);
 	});
 
