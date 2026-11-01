@@ -1,9 +1,9 @@
 /**
  * Reads the sections of a wasm module that the module checks compare: the
  * types, the imports, the functions, the tables, the memories, the globals,
- * the exports, and the custom sections. It skips the code and data sections
- * by their declared sizes, so it doesn't decode a single instruction of a
- * function body.
+ * the exports, and the custom sections. It keeps the code section's bytes
+ * for `wasm-code.ts` to decode, and skips the data section by its declared
+ * size.
  *
  * The reader accepts the MVP binary format, the data count section of bulk
  * memory, and the shared flag of memory limits. The export list records that
@@ -73,6 +73,13 @@ export interface CustomSection {
 	readonly bytes: Uint8Array;
 }
 
+/** The contents of a section, after its id and size. */
+export interface SectionContents {
+	/** The offset of the first byte in the module. */
+	readonly offset: number;
+	readonly bytes: Uint8Array;
+}
+
 /** The sections of a module that {@link readModule} decodes. */
 export interface WasmModule {
 	readonly types: readonly FunctionType[];
@@ -85,6 +92,8 @@ export interface WasmModule {
 	/** The globals that the module defines, after the imported ones. */
 	readonly globals: readonly Global[];
 	readonly exports: readonly Export[];
+	/** The code section's contents, or `undefined` when the module has none. */
+	readonly code: SectionContents | undefined;
 	readonly customSections: readonly CustomSection[];
 }
 
@@ -109,20 +118,26 @@ const sectionOrder: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 10, 11];
 // A wasm name keeps a leading U+FEFF, which the decoder drops by default.
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-/** A cursor over the module's bytes, which throws instead of reading past `end`. */
-class Reader {
+/**
+ * A cursor over bytes, which throws instead of reading past `end`. Its
+ * messages name each offset plus `base`, so a cursor over part of a module
+ * names the byte's offset in the module.
+ */
+export class Reader {
 	offset: number;
 	readonly #bytes: Uint8Array;
 	readonly #end: number;
+	readonly #base: number;
 
-	constructor(bytes: Uint8Array, offset: number, end: number) {
+	constructor(bytes: Uint8Array, offset: number, end: number, base = 0) {
 		this.#bytes = bytes;
 		this.offset = offset;
 		this.#end = end;
+		this.#base = base;
 	}
 
 	fail(what: string, at: number = this.offset): never {
-		throw new WasmFormatError(`At byte ${String(at)}: ${what}`);
+		throw new WasmFormatError(`At byte ${String(at + this.#base)}: ${what}`);
 	}
 
 	atEnd(): boolean {
@@ -357,6 +372,7 @@ export function readModule(bytes: Uint8Array): WasmModule {
 	let memories: Limits[] = [];
 	let globals: Global[] = [];
 	let exports: Export[] = [];
+	let code: SectionContents | undefined = undefined;
 	const customSections: CustomSection[] = [];
 	let lastRank = -1;
 
@@ -405,6 +421,10 @@ export function readModule(bytes: Uint8Array): WasmModule {
 			case 7:
 				exports = section.vector(() => readExport(section));
 				break;
+			case 10:
+				code = { offset: end - size, bytes: contents };
+				section.offset = end;
+				break;
 			default:
 				section.offset = end;
 		}
@@ -415,7 +435,43 @@ export function readModule(bytes: Uint8Array): WasmModule {
 			);
 		}
 	}
-	return { types, imports, functions, tables, memories, globals, exports, customSections };
+	return { types, imports, functions, tables, memories, globals, exports, code, customSections };
+}
+
+/**
+ * Reads the function names of a module's `name` section, keyed by function
+ * index. A module without the section gives an empty map.
+ *
+ * @throws WasmFormatError if the module has two `name` sections, or if a subsection doesn't follow the format.
+ */
+export function functionNames(module: WasmModule): ReadonlyMap<number, string> {
+	const sections = module.customSections.filter((section) => section.name === "name");
+	const [section, ...others] = sections;
+	if (section === undefined) {
+		return new Map();
+	}
+	const reader = new Reader(section.bytes, 0, section.bytes.length);
+	if (others.length > 0) {
+		return reader.fail("the module has more than one name section.", 0);
+	}
+	const names = new Map<number, string>();
+	while (!reader.atEnd()) {
+		const id = reader.byte();
+		const contents = reader.bytes(reader.u32());
+		if (id !== 1) {
+			continue;
+		}
+		const subsection = new Reader(contents, 0, contents.length);
+		for (const [index, name] of subsection.vector(
+			() => [subsection.u32(), subsection.name()] as const,
+		)) {
+			names.set(index, name);
+		}
+		if (!subsection.atEnd()) {
+			subsection.fail("the function names subsection has bytes after its last name.");
+		}
+	}
+	return names;
 }
 
 /** One tool or language that a `producers` section names, with its version. */
