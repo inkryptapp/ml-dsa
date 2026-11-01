@@ -2,17 +2,45 @@ import { describe, expect, expectTypeOf, test } from "vite-plus/test";
 
 import * as entry from "../src/index.js";
 import { mlDsa44, mlDsa65, mlDsa87 } from "../src/index.js";
-import {
-	freshMemoryMismatch,
-	parameterSetCases,
-	prototypeOf,
-	seedFrom,
-	thrown,
-	untypedFunction,
-} from "./helpers.js";
+import { parameterSetCases, prototypeOf } from "./helpers.js";
 
 test("the default entry exports exactly the three objects", () => {
 	expect(Object.keys(entry).toSorted()).toStrictEqual(["mlDsa44", "mlDsa65", "mlDsa87"]);
+});
+
+test("every object and function that the default entry reaches is frozen, with exactly its own keys", () => {
+	// Each path names an object or a function that the walk must reach, with
+	// its exact own keys. The walk follows own property values, never
+	// prototypes, so it must reach nothing else.
+	const expected = new Map<string, readonly PropertyKey[]>();
+	for (const name of ["mlDsa44", "mlDsa65", "mlDsa87"]) {
+		expected.set(name, ["parameterSet", "lengths", "keygen", "sign", "verify"]);
+		expected.set(`${name}.lengths`, ["seed", "randomness", "publicKey", "signature", "maxContext"]);
+		for (const operation of ["keygen", "sign", "verify"]) {
+			expected.set(`${name}.${operation}`, ["length", "name"]);
+		}
+	}
+
+	const reached = new Map<string, readonly PropertyKey[]>();
+	const pending: (readonly [string, object])[] = Object.entries(entry);
+	for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+		const [path, value] = next;
+		expect(Object.isFrozen(value), path).toBe(true);
+		const ownKeys = Reflect.ownKeys(value);
+		reached.set(path, ownKeys);
+		for (const key of ownKeys) {
+			const childPath = `${path}.${String(key)}`;
+			const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+			expect(descriptor, childPath).toHaveProperty("value");
+			const child: unknown = descriptor?.value;
+			if ((typeof child === "object" && child !== null) || typeof child === "function") {
+				pending.push([childPath, child]);
+			}
+		}
+	}
+	const sorted = (map: ReadonlyMap<string, readonly PropertyKey[]>): unknown =>
+		[...map].toSorted(([a], [b]) => a.localeCompare(b));
+	expect(sorted(reached)).toStrictEqual(sorted(expected));
 });
 
 test("each object names its parameter set and holds the FIPS 204 lengths", () => {
@@ -38,7 +66,7 @@ test("the lengths have literal types", () => {
 	expectTypeOf(mlDsa87.parameterSet).toEqualTypeOf<"ML-DSA-87">();
 });
 
-describe.each(parameterSetCases)("the $objectName object", ({ objectName, object, noble }) => {
+describe.each(parameterSetCases)("the $objectName object", ({ object, noble }) => {
 	test("has exactly its five own keys, Object.prototype as its prototype, and is frozen", () => {
 		expect(Reflect.ownKeys(object)).toStrictEqual([
 			"parameterSet",
@@ -85,17 +113,4 @@ describe.each(parameterSetCases)("the $objectName object", ({ objectName, object
 		expect(Reflect.set(object.lengths, "seed", 64)).toBe(false);
 		expect(Reflect.set(object.keygen, "extra", 1)).toBe(false);
 	});
-
-	test.each(["sign", "verify"] as const)(
-		"%s throws a plain Error until it is implemented",
-		(operation) => {
-			const error = thrown(() => untypedFunction(object, operation)({ seed: seedFrom(0) }));
-			expect(prototypeOf(error)).toBe(Error.prototype);
-			expect(error).toHaveProperty(
-				"message",
-				`${objectName}.${operation}: the operation is not implemented yet.`,
-			);
-			expect(freshMemoryMismatch()).toBeNull();
-		},
-	);
 });

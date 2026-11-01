@@ -1,5 +1,6 @@
 import * as messages from "./messages.js";
 import type { ByteInput, Site } from "./messages.js";
+import { maxContextBytes, randomnessBytes } from "./parameter-sets.js";
 
 // The checks read a caller's array only through these six getters, looked up
 // once at load. An own property or a subclass getter can report a `length`
@@ -77,20 +78,14 @@ function isSharedOrResizable(buffer: ArrayBufferLike): boolean {
 }
 
 /**
- * Checks a secret byte input, such as a seed, for presence, type, backing,
- * then length, and returns a view of exactly its bytes. The zero check and the
+ * Checks a byte input of any length, such as a message, for presence, type,
+ * then backing, and returns a view of exactly its bytes. Later checks and the
  * core read only that view.
  *
  * @throws TypeError if the input is missing, isn't a `Uint8Array`, or sits on
  * a shared, resizable, or detached buffer.
- * @throws RangeError if the input isn't `length` bytes long.
  */
-export function checkSecretBytes(
-	site: Site,
-	input: ByteInput,
-	value: unknown,
-	length: number,
-): Uint8Array {
+export function checkBytes(site: Site, input: ByteInput, value: unknown): Uint8Array {
 	if (value === undefined) {
 		throw new TypeError(messages.missing(site, input));
 	}
@@ -99,13 +94,64 @@ export function checkSecretBytes(
 	}
 	const buffer = bufferOf.call(value);
 	if (isSharedOrResizable(buffer) || isDetached.call(buffer)) {
-		throw new TypeError(messages.badSecretBacking(site, input, length));
+		throw new TypeError(messages.badBacking(site, input));
 	}
-	const byteLength = lengthOf.call(value);
-	if (byteLength !== length) {
+	return new Uint8Array(buffer, byteOffsetOf.call(value), lengthOf.call(value));
+}
+
+/**
+ * Checks a byte input of one fixed length, such as a seed, and returns a view
+ * of exactly its bytes.
+ *
+ * @throws TypeError if the input is missing, isn't a `Uint8Array`, or sits on
+ * a shared, resizable, or detached buffer.
+ * @throws RangeError if the input isn't `length` bytes long.
+ */
+export function checkExactBytes(
+	site: Site,
+	input: ByteInput,
+	value: unknown,
+	length: number,
+): Uint8Array {
+	const view = checkBytes(site, input, value);
+	if (view.length !== length) {
 		throw new RangeError(messages.wrongLength(site, input, length));
 	}
-	return new Uint8Array(buffer, byteOffsetOf.call(value), byteLength);
+	return view;
+}
+
+/**
+ * Checks an optional context string and returns a view of exactly its bytes.
+ * A missing context is the empty context string.
+ *
+ * @throws TypeError if the context isn't a `Uint8Array`, or sits on a shared,
+ * resizable, or detached buffer.
+ * @throws RangeError if the context is longer than 255 bytes.
+ */
+export function checkContext(site: Site, value: unknown): Uint8Array {
+	if (value === undefined) {
+		return new Uint8Array(0);
+	}
+	const view = checkBytes(site, "context", value);
+	if (view.length > maxContextBytes) {
+		throw new RangeError(messages.contextTooLong(site, view.length));
+	}
+	return view;
+}
+
+/**
+ * Checks the signing randomness, which is either the exact string
+ * `"deterministic"` or 32 bytes.
+ *
+ * @throws TypeError if the randomness is missing, is neither a `Uint8Array`
+ * nor `"deterministic"`, or sits on a shared, resizable, or detached buffer.
+ * @throws RangeError if the randomness isn't 32 bytes long.
+ */
+export function checkRandomness(site: Site, value: unknown): Uint8Array | "deterministic" {
+	if (value === "deterministic") {
+		return value;
+	}
+	return checkExactBytes(site, "randomness", value, randomnessBytes);
 }
 
 /**

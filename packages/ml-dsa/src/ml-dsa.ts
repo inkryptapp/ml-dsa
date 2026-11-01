@@ -1,6 +1,12 @@
-import { checkSecretBytes, isAllZero } from "./bytes.js";
-import { runCore } from "./core.js";
+import { nullPointer, pointer } from "./brand.js";
+import { checkBytes, checkContext, checkExactBytes, checkRandomness, isAllZero } from "./bytes.js";
+import { regionBytes, runCore, type Instance, type Status } from "./core.js";
+import {
+	writeMessageRepresentative,
+	writeVerifierMessageRepresentative,
+} from "./message-representative.js";
 import * as messages from "./messages.js";
+import { readOptions } from "./options.js";
 import {
 	maxContextBytes,
 	parameterSets,
@@ -8,6 +14,7 @@ import {
 	seedBytes,
 	type ObjectName,
 } from "./parameter-sets.js";
+import { messageRepresentativeBytes, publicKeyHashOffset } from "./upstream.js";
 
 /** The byte lengths of one parameter set's inputs and outputs. */
 export interface Lengths<PublicKey extends number, Signature extends number> {
@@ -54,7 +61,7 @@ export interface VerifyOptions {
 	/** The signature to check. */
 	readonly signature: Uint8Array;
 	/**
-	 * The context string that the message was signed under.
+	 * The context string that the message was signed under, at most 255 bytes.
 	 *
 	 * @defaultValue The empty context string.
 	 */
@@ -102,21 +109,89 @@ export interface MlDsa<Name extends string, PublicKey extends number, Signature 
 	 */
 	readonly keygen: (seed: Uint8Array) => KeygenResult;
 	/**
-	 * Signs a message with pure ML-DSA. Not implemented yet, so it always
-	 * throws.
+	 * Signs a message with pure ML-DSA, as `ML-DSA.Sign` in FIPS 204 does, but
+	 * with signing randomness that the caller supplies. The key pair derives
+	 * from the seed inside the call, so no secret key enters or leaves
+	 * JavaScript. The message can have any length.
 	 *
-	 * @throws Error on every call.
+	 * The package draws no randomness. Draw the signing randomness for each
+	 * call from a cryptographically secure source, such as
+	 * `crypto.getRandomValues`, or pass `"deterministic"` for the deterministic
+	 * variant. Before it returns or throws, `sign` zeroes the copies of the
+	 * seed, the secret key, and the signing randomness that it wrote to
+	 * WebAssembly memory.
+	 *
+	 * The checks run in this order, and the first that fails throws. First the
+	 * options: their type, their prototype, and their keys. Then `seed`,
+	 * `message`, `context`, and `randomness`, in that order. Each input gets
+	 * the checks that apply to it, in the order presence, type, backing, then
+	 * length: `context` has no presence check, and `message` has no length
+	 * check. Then the zero checks, the seed before the randomness. The options
+	 * are read once, as own properties only, before any check of an input.
+	 *
+	 * @param options The seed, the message, the signing randomness, and the
+	 * optional context string. Each byte input is a `Uint8Array` from any realm
+	 * over a fixed-length, non-shared, non-detached `ArrayBuffer`. The options
+	 * object's prototype must be `Object.prototype` or `null`.
+	 * @returns The signature, a new array that no later call changes.
+	 * @throws TypeError if `options` isn't an object, if its prototype is
+	 * neither `Object.prototype` nor `null`, or if it holds any other own key.
+	 * @throws TypeError if `seed`, `message`, or `randomness` is missing, if an
+	 * input has the wrong type, or if an input sits on a shared, resizable, or
+	 * detached buffer.
+	 * @throws RangeError if `seed` or `randomness` isn't 32 bytes long, if
+	 * `context` is longer than 255 bytes, or if all the bytes of `seed` or
+	 * `randomness` are zero, which catches a buffer that was never filled.
+	 * @throws Error if the call fails after its checks, with the original error,
+	 * or `{ code }` for a failing return value from mldsa-native, in `cause`.
+	 * @throws Whatever your own getters and proxy traps throw while `sign` reads
+	 * `options`, unchanged, and the engine's `TypeError` for an invalid trap
+	 * result.
+	 * @throws The engine's own stack-overflow error, if the caller has used up
+	 * the JavaScript stack. By then, `sign` has zeroed anything that it wrote
+	 * to WebAssembly memory. Some engines throw this error as a `RangeError`, so
+	 * a `RangeError` alone doesn't prove a bad input.
+	 *
+	 * @example
+	 * ```ts
+	 * const randomness = crypto.getRandomValues(new Uint8Array(mlDsa87.lengths.randomness));
+	 * const signature = mlDsa87.sign({ seed, message, randomness });
+	 * ```
 	 */
 	readonly sign: (options: SignOptions) => Uint8Array<ArrayBuffer>;
 	/**
-	 * Checks a pure ML-DSA signature. Not implemented yet, so it always throws.
+	 * Checks a pure ML-DSA signature over a message, as `ML-DSA.Verify` in
+	 * FIPS 204 does. The message can have any length.
 	 *
-	 * @throws Error on every call.
+	 * `verify` never throws for a bad input. It returns `false` for options
+	 * that aren't a plain object, an unknown option, a missing input, a wrong
+	 * type, a wrong length, or a shared, resizable, or detached buffer. It also
+	 * returns `false` when your own getter or proxy trap throws, or when the
+	 * call fails inside the package. So `false` means that the signature wasn't
+	 * shown to be valid, not that it was shown to be invalid.
+	 *
+	 * @param options The signer's public key, the message, the signature, and
+	 * the optional context string that the message was signed under. The
+	 * options object's prototype must be `Object.prototype` or `null`.
+	 * @returns `true` if the signature is valid for the message, the context
+	 * string, and the public key, and `false` otherwise.
+	 * @throws The engine's own stack-overflow error, if too little JavaScript
+	 * stack is left to start `verify`.
+	 *
+	 * @example
+	 * ```ts
+	 * const valid = mlDsa87.verify({ publicKey, message, signature });
+	 * ```
 	 */
 	readonly verify: (options: VerifyOptions) => boolean;
 }
 
 type ParameterSet<Key extends ObjectName> = (typeof parameterSets)[Key];
+
+// The read step reads the known keys in this order, which is also the order
+// of the input checks.
+const signKeys = ["seed", "message", "context", "randomness"] as const;
+const verifyKeys = ["publicKey", "message", "signature", "context"] as const;
 
 function createMlDsa<Key extends ObjectName>(
 	objectName: Key,
@@ -137,34 +212,135 @@ function createMlDsa<Key extends ObjectName>(
 			signature: set.signature,
 			maxContext: maxContextBytes,
 		});
+	/**
+	 * Copies the seed into its region and derives the key pair into the
+	 * `publicKey` and `secretKey` regions.
+	 *
+	 * @returns `null`, or the status of a non-zero return code.
+	 */
+	const deriveKeyPair = (instance: Instance, seedView: Uint8Array): Status | null => {
+		const { regions, functions } = instance;
+		regionBytes(instance, regions.seed).set(seedView);
+		const code = functions[set.keypairExport](
+			regions.publicKey.pointer,
+			regions.secretKey.pointer,
+			regions.seed.pointer,
+		);
+		return code === 0 ? null : { kind: "status", code };
+	};
 	// Arrow functions have no `prototype`, so each function's own keys are
 	// exactly `length` and `name`.
 	const keygen = (seed: Uint8Array): KeygenResult => {
-		const seedView = checkSecretBytes(keygenSite, "seed", seed, seedBytes);
+		const seedView = checkExactBytes(keygenSite, "seed", seed, seedBytes);
 		if (isAllZero(seedView)) {
 			throw new RangeError(messages.allZero(keygenSite, "seed"));
 		}
 		return runCore(keygenSite, (instance) => {
-			instance.seed.bytes.set(seedView);
-			const code = instance.functions[set.keypairExport](
-				instance.publicKey.pointer,
-				instance.secretKey.pointer,
-				instance.seed.pointer,
+			const keyPairStatus = deriveKeyPair(instance, seedView);
+			if (keyPairStatus !== null) {
+				return keyPairStatus;
+			}
+			const publicKey = regionBytes(instance, instance.regions.publicKey).slice(0, set.publicKey);
+			return { kind: "done", output: { publicKey } };
+		});
+	};
+	const sign = (options: SignOptions): Uint8Array<ArrayBuffer> => {
+		const values = readOptions(signSite, options, signKeys);
+		const seedView = checkExactBytes(signSite, "seed", values.get("seed"), seedBytes);
+		const messageView = checkBytes(signSite, "message", values.get("message"));
+		const contextView = checkContext(signSite, values.get("context"));
+		const randomness = checkRandomness(signSite, values.get("randomness"));
+		if (isAllZero(seedView)) {
+			throw new RangeError(messages.allZero(signSite, "seed"));
+		}
+		if (randomness !== "deterministic" && isAllZero(randomness)) {
+			throw new RangeError(messages.allZero(signSite, "randomness"));
+		}
+		return runCore(signSite, (instance, initShake) => {
+			const { regions, functions } = instance;
+			const keyPairStatus = deriveKeyPair(instance, seedView);
+			if (keyPairStatus !== null) {
+				return keyPairStatus;
+			}
+			const publicKeyHash = pointer(regions.secretKey.pointer + publicKeyHashOffset);
+			const prefixStatus = writeMessageRepresentative(
+				instance,
+				initShake,
+				publicKeyHash,
+				contextView,
+				messageView,
 			);
-			if (code !== 0) {
-				return { kind: "status", code };
+			if (prefixStatus !== null) {
+				return prefixStatus;
+			}
+			const randomnessRegion = regionBytes(instance, regions.randomness);
+			if (randomness === "deterministic") {
+				randomnessRegion.fill(0);
+			} else {
+				randomnessRegion.set(randomness);
+			}
+			// The last argument asks for external mu, so upstream reads the
+			// message representative in place of a message and ignores the
+			// prefix arguments.
+			const signatureCode = functions[set.signatureExport](
+				regions.signature.pointer,
+				regions.messageRepresentative.pointer,
+				messageRepresentativeBytes,
+				nullPointer,
+				0,
+				regions.randomness.pointer,
+				regions.secretKey.pointer,
+				1,
+			);
+			if (signatureCode !== 0) {
+				return { kind: "status", code: signatureCode };
 			}
 			return {
 				kind: "done",
-				output: { publicKey: instance.publicKey.bytes.slice(0, set.publicKey) },
+				output: regionBytes(instance, regions.signature).slice(0, set.signature),
 			};
 		});
 	};
-	const sign = (_options: SignOptions): Uint8Array<ArrayBuffer> => {
-		throw new Error(messages.notImplemented(signSite));
-	};
-	const verify = (_options: VerifyOptions): boolean => {
-		throw new Error(messages.notImplemented(verifySite));
+	const verify = (options: VerifyOptions): boolean => {
+		try {
+			const values = readOptions(verifySite, options, verifyKeys);
+			const publicKeyView = checkExactBytes(
+				verifySite,
+				"publicKey",
+				values.get("publicKey"),
+				set.publicKey,
+			);
+			const messageView = checkBytes(verifySite, "message", values.get("message"));
+			const signatureView = checkExactBytes(
+				verifySite,
+				"signature",
+				values.get("signature"),
+				set.signature,
+			);
+			const contextView = checkContext(verifySite, values.get("context"));
+			return runCore(verifySite, (instance, initShake) => {
+				const { regions, functions } = instance;
+				regionBytes(instance, regions.signature).set(signatureView);
+				const prefixStatus = writeVerifierMessageRepresentative(
+					instance,
+					initShake,
+					publicKeyView,
+					contextView,
+					messageView,
+				);
+				if (prefixStatus !== null) {
+					return prefixStatus;
+				}
+				const code = functions[set.verifyExport](
+					regions.signature.pointer,
+					regions.messageRepresentative.pointer,
+					regions.publicKey.pointer,
+				);
+				return { kind: "done", output: code === 0 };
+			});
+		} catch {
+			return false;
+		}
 	};
 	return Object.freeze({
 		parameterSet: set.parameterSet,

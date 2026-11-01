@@ -5,3 +5,6 @@ export type Pointer = number & { readonly __brand: "Pointer" };
 export function pointer(offset: number): Pointer {
 	return offset as Pointer;
 }
+
+/** The C null pointer, for an argument that upstream ignores or allows to be `NULL`. */
+export const nullPointer: Pointer = pointer(0);

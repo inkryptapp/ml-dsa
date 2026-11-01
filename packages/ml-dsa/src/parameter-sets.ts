@@ -10,7 +10,7 @@ export const maxContextBytes = 255;
 /**
  * The three parameter sets, keyed by the name of their exported object. Each
  * holds its FIPS 204 name as `parameterSet`, its lengths from FIPS 204,
- * Table 2, and its keygen export.
+ * Table 2, and its export names.
  */
 export const parameterSets = {
 	mlDsa44: {
@@ -19,6 +19,8 @@ export const parameterSets = {
 		secretKey: 2560,
 		signature: 2420,
 		keypairExport: "mldsa44_keypair_internal",
+		signatureExport: "mldsa44_signature_internal",
+		verifyExport: "mldsa44_verify_extmu",
 	},
 	mlDsa65: {
 		parameterSet: "ML-DSA-65",
@@ -26,6 +28,8 @@ export const parameterSets = {
 		secretKey: 4032,
 		signature: 3309,
 		keypairExport: "mldsa65_keypair_internal",
+		signatureExport: "mldsa65_signature_internal",
+		verifyExport: "mldsa65_verify_extmu",
 	},
 	mlDsa87: {
 		parameterSet: "ML-DSA-87",
@@ -33,6 +37,8 @@ export const parameterSets = {
 		secretKey: 4896,
 		signature: 4627,
 		keypairExport: "mldsa87_keypair_internal",
+		signatureExport: "mldsa87_signature_internal",
+		verifyExport: "mldsa87_verify_extmu",
 	},
 } as const;
 
@@ -40,6 +46,6 @@ export const parameterSets = {
 export type ObjectName = keyof typeof parameterSets;
 
 /** The largest value of one length field across the parameter sets, which sizes a region. */
-export function longest(field: "publicKey" | "secretKey"): number {
+export function longest(field: "publicKey" | "secretKey" | "signature"): number {
 	return Math.max(...Object.values(parameterSets).map((set) => set[field]));
 }

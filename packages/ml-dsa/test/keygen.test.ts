@@ -1,6 +1,3 @@
-import { Buffer } from "node:buffer";
-import { runInNewContext } from "node:vm";
-
 import { describe, expect, test } from "vite-plus/test";
 
 import {
@@ -11,24 +8,10 @@ import {
 	thrown,
 	untypedFunction,
 } from "./helpers.js";
+import { acceptedForms, badBackings, LengthLiar, watchedReads, wrongTypes } from "./inputs.js";
 
 const backingMessage = (site: string): string =>
 	`${site}: seed must be backed by a fixed-length, non-shared, non-detached ArrayBuffer, such as new Uint8Array(new ArrayBuffer(32)) filled with set.`;
-
-/** A copy of `bytes` in a `Uint8Array` of another realm. */
-function fromAnotherRealm(bytes: Uint8Array): unknown {
-	return runInNewContext("(bytes) => new Uint8Array(bytes)")(Array.from(bytes));
-}
-
-class Subclass extends Uint8Array {}
-
-// TypeScript declares `length` and `byteOffset` as properties, so a class
-// can't override them with accessors, and the tests define the getters here.
-class LengthLiar extends Uint8Array {}
-Object.defineProperty(LengthLiar.prototype, "length", { get: () => 32 });
-
-class ByteOffsetLiar extends Uint8Array {}
-Object.defineProperty(ByteOffsetLiar.prototype, "byteOffset", { get: () => 7 });
 
 for (const { objectName, object, noble } of parameterSetCases) {
 	const site = `${objectName}.keygen`;
@@ -81,74 +64,38 @@ for (const { objectName, object, noble } of parameterSetCases) {
 		test("reads exactly the seed's own bytes, whatever its realm, class, or own properties", () => {
 			const seed = seedFrom(1);
 			const expected = noble.keygen(seed).publicKey;
-			const offsetBuffer = new Uint8Array(new ArrayBuffer(64));
-			offsetBuffer.set(seed, 16);
-			const withOwnLength = new Uint8Array(seed);
-			Object.defineProperty(withOwnLength, "length", { value: 31 });
-			const withOwnByteOffset = new Uint8Array(seed);
-			Object.defineProperty(withOwnByteOffset, "byteOffset", { value: 7 });
-			const accepted: readonly unknown[] = [
-				Buffer.from(seed),
-				new Subclass(seed),
-				new LengthLiar(seed),
-				new ByteOffsetLiar(seed),
-				withOwnLength,
-				withOwnByteOffset,
-				new Uint8Array(offsetBuffer.buffer, 16, 32),
-				fromAnotherRealm(seed),
-			];
-			for (const value of accepted) {
+			const before = { ...watchedReads };
+			for (const [, value] of acceptedForms(seed)) {
 				expect(untypedFunction(object, "keygen")(value)).toStrictEqual({ publicKey: expected });
 				expect(freshMemoryMismatch()).toBeNull();
 			}
+			expect(watchedReads).toStrictEqual(before);
 		});
 
 		test("throws TypeError for a missing seed", () => {
 			expectRejected(undefined, TypeError.prototype, `${site}: seed is required.`);
 		});
 
-		test.each([
-			["null", null, "object"],
-			["a number", 32, "number"],
-			["a string", "x".repeat(32), "string"],
-			["an array of numbers", Array.from(seedFrom(2)), "object"],
-			["an ArrayBuffer", new ArrayBuffer(32), "object"],
-			["a DataView", new DataView(new ArrayBuffer(32)), "object"],
-			["a Uint8ClampedArray", new Uint8ClampedArray(seedFrom(2)), "object"],
-			["an Int8Array", new Int8Array(seedFrom(2)), "object"],
-			["a Uint16Array", new Uint16Array(16).fill(1), "object"],
-			["an array-like object", { length: 32, 0: 1 }, "object"],
-			["a Proxy of a Uint8Array", new Proxy(seedFrom(2), {}), "object"],
-			["a function", () => seedFrom(2), "function"],
-		])("throws TypeError for %s", (_, value, type) => {
-			expectRejected(
-				value,
-				TypeError.prototype,
-				`${site}: seed must be a Uint8Array, but typeof seed is "${type}".`,
-			);
-		});
-
-		test("throws TypeError for a seed on a shared buffer, before it checks the length", () => {
-			for (const length of [32, 31]) {
-				const shared = new Uint8Array(new SharedArrayBuffer(length));
-				shared.set(seedFrom(3).subarray(0, length));
-				expectRejected(shared, TypeError.prototype, backingMessage(site));
+		test("throws TypeError for each wrong type of seed", () => {
+			for (const [, value, type] of wrongTypes(seedFrom(2))) {
+				expectRejected(
+					value,
+					TypeError.prototype,
+					`${site}: seed must be a Uint8Array, but typeof seed is "${type}".`,
+				);
 			}
 		});
 
-		test("throws TypeError for a seed on a resizable buffer", () => {
-			const resizable = new Uint8Array(new ArrayBuffer(32, { maxByteLength: 64 }));
-			resizable.set(seedFrom(3));
-			expectRejected(resizable, TypeError.prototype, backingMessage(site));
-			const fixedView = new Uint8Array(new ArrayBuffer(32, { maxByteLength: 64 }), 0, 32);
-			fixedView.set(seedFrom(3));
-			expectRejected(fixedView, TypeError.prototype, backingMessage(site));
+		test("throws TypeError for a seed on a shared, resizable, or detached buffer", () => {
+			for (const [, value] of badBackings(seedFrom(3))) {
+				expectRejected(value, TypeError.prototype, backingMessage(site));
+			}
 		});
 
-		test("throws TypeError for a seed on a detached buffer", () => {
-			const seed = seedFrom(3);
-			seed.buffer.transfer();
-			expectRejected(seed, TypeError.prototype, backingMessage(site));
+		test("throws TypeError for a shared seed before it checks the length", () => {
+			const shared = new Uint8Array(new SharedArrayBuffer(31));
+			shared.set(seedFrom(3).subarray(0, 31));
+			expectRejected(shared, TypeError.prototype, backingMessage(site));
 		});
 
 		test("throws RangeError for a seed that isn't 32 bytes long", () => {
