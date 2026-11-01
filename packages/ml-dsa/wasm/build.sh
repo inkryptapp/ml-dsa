@@ -11,6 +11,10 @@
 #   STACK_SIZE     the wasm stack size in bytes, from sizes.json
 #   out            the output folder
 #
+# With the argument `probe`, the file runs the check command's probes of
+# upstream's headers instead, with the same flags. The probe function below
+# says how.
+#
 # Every compiler and linker flag lives in this file. Records 0001 to 0003 in
 # docs/adr/ hold the reasons.
 set -euo pipefail
@@ -47,9 +51,14 @@ cflags=(
 	-Wno-unused-command-line-argument
 	-nostdlibinc -isystem "$INCLUDE/shim"
 	-I"$INCLUDE" -I"$MLDSA_NATIVE/mldsa"
+	"${prefix_maps[@]}"
+)
+
+# The shipped config, which the check command's config diff compares with
+# upstream's CT config.
+config=(
 	'-DMLD_CONFIG_FILE="mldsa_wasm_config.h"'
 	"-DMLD_CONFIG_NAMESPACE_PREFIX=$namespace"
-	"${prefix_maps[@]}"
 )
 
 # A fixed list, so the link order never depends on a folder listing.
@@ -60,21 +69,15 @@ sources=(
 )
 parameter_sets=(44 65 87)
 
-objects=()
-for parameter_set in "${parameter_sets[@]}"; do
-	if [ "$parameter_set" = 44 ]; then
+# Sets object_flags to the compiler flags of one parameter set's objects. Only
+# the ML-DSA-44 objects hold the code that the parameter sets share.
+set_object_flags() {
+	local shared=-DMLD_CONFIG_MULTILEVEL_NO_SHARED
+	if [ "$1" = 44 ]; then
 		shared=-DMLD_CONFIG_MULTILEVEL_WITH_SHARED
-	else
-		shared=-DMLD_CONFIG_MULTILEVEL_NO_SHARED
 	fi
-	for source in "${sources[@]}"; do
-		object=obj/$parameter_set/${source%.c}.o
-		mkdir -p "$(dirname "$object")"
-		"$CC" "${cflags[@]}" "-DMLD_CONFIG_PARAMETER_SET=$parameter_set" "$shared" \
-			-c "$MLDSA_NATIVE/mldsa/$source" -o "$object"
-		objects+=("$object")
-	done
-done
+	object_flags=("${cflags[@]}" "${config[@]}" "-DMLD_CONFIG_PARAMETER_SET=$1" "$shared")
+}
 
 # wasm-ld exports the memory as `memory` on its own.
 exports=(__stack_low __stack_high __heap_base __heap_end)
@@ -90,15 +93,102 @@ for function in init absorb finalize squeeze release; do
 	exports+=("${namespace}_shake256_$function")
 done
 
-link_flags=(
-	--no-entry --stack-first
-	-z "stack-size=$STACK_SIZE" "--initial-memory=$MEMORY_SIZE" --no-growable-memory
-	--keep-section=producers --keep-section=target_features
-)
-for export in "${exports[@]}"; do
-	link_flags+=("--export=$export")
-done
+build() {
+	local objects=() parameter_set source object
+	for parameter_set in "${parameter_sets[@]}"; do
+		set_object_flags "$parameter_set"
+		for source in "${sources[@]}"; do
+			object=obj/$parameter_set/${source%.c}.o
+			mkdir -p "$(dirname "$object")"
+			"$CC" "${object_flags[@]}" -c "$MLDSA_NATIVE/mldsa/$source" -o "$object"
+			objects+=("$object")
+		done
+	done
 
-mkdir -p "$out"
-"$WASM_LD" "${link_flags[@]}" --strip-all -o "$out/mldsa.wasm" "${objects[@]}"
-"$WASM_LD" "${link_flags[@]}" -o "$out/mldsa.unstripped.wasm" "${objects[@]}"
+	local link_flags=(
+		--no-entry --stack-first
+		-z "stack-size=$STACK_SIZE" "--initial-memory=$MEMORY_SIZE" --no-growable-memory
+		--keep-section=producers --keep-section=target_features
+	)
+	for export in "${exports[@]}"; do
+		link_flags+=("--export=$export")
+	done
+
+	mkdir -p "$out"
+	"$WASM_LD" "${link_flags[@]}" --strip-all -o "$out/mldsa.wasm" "${objects[@]}"
+	"$WASM_LD" "${link_flags[@]}" -o "$out/mldsa.unstripped.wasm" "${objects[@]}"
+}
+
+# Compiles the probe file named by the first argument with the object flags
+# of the parameter set in the second, under -fsyntax-only. Then it prints a
+# section line with the result, followed by clang's messages.
+probe_layout() {
+	local section=$1 parameter_set=$2 status=passed
+	set_object_flags "$parameter_set"
+	"$CC" "${object_flags[@]}" -Wno-c11-extensions -fsyntax-only "$out/$section.c" \
+		>"$out/$section.log" 2>&1 || status=failed
+	echo "@@ $section $parameter_set $status"
+	cat "$out/$section.log"
+}
+
+# The check command runs this mode through `scripts/nix shell`, with the
+# pinned clang as CC and the working tree's files as MLDSA_NATIVE and
+# INCLUDE. It takes the layout probe's _Static_assert lines, a line that must
+# fail, and then the -D definitions of upstream's CT config, which the check
+# reads from upstream's CT workflow and action. That config adds them to
+# upstream's default config. MLD_CONFIG_CT_TESTING_ENABLED makes upstream
+# include valgrind/memcheck.h, so the probe gives it an empty stub. It prints
+# each probe's output after a section line that starts with "@@":
+#
+#   prototypes N             each export's declaration in upstream's headers
+#   layout N RESULT          clang's messages for the layout probe
+#   config N                 the macros under the shipped config
+#   config ct                the macros under upstream's CT config, once
+#   failing-layout 44 RESULT clang's messages for the failing line, once
+#
+# N is each parameter set, and each compile takes that parameter set's object
+# flags. RESULT is passed or failed.
+probe() {
+	local layout_lines=$1 failing_line=$2 parameter_set name
+	shift 2
+	local ct_config=("$@")
+	out=$(mktemp -d)
+	mkdir -p "$out/stub/valgrind"
+	: >"$out/stub/valgrind/memcheck.h"
+	printf '%s\n' '#include "src/sign.h"' '#include "src/fips202/fips202.h"' >"$out/headers.c"
+	printf '%s\n' '#include "src/common.h"' >"$out/config.c"
+	printf '%s\n' "$layout_lines" | cat "$out/headers.c" - >"$out/layout.c"
+	printf '%s\n' "$failing_line" | cat "$out/headers.c" - >"$out/failing-layout.c"
+
+	for parameter_set in "${parameter_sets[@]}"; do
+		set_object_flags "$parameter_set"
+		echo "@@ prototypes $parameter_set"
+		for name in "${exports[@]}"; do
+			case $name in
+			__*) ;;
+			*)
+				"$CC" "${object_flags[@]}" -fsyntax-only -Xclang -ast-print \
+					-Xclang -ast-dump-filter -Xclang "$name" "$out/headers.c"
+				;;
+			esac
+		done
+		probe_layout layout "$parameter_set"
+		echo "@@ config $parameter_set"
+		"$CC" "${object_flags[@]}" -dM -E "$out/config.c"
+	done
+	echo "@@ config ct"
+	"$CC" "${cflags[@]}" "${ct_config[@]}" -isystem "$out/stub" -dM -E "$out/config.c"
+	probe_layout failing-layout 44
+}
+
+case ${1-build} in
+build) build ;;
+probe)
+	shift
+	probe "$@"
+	;;
+*)
+	echo "build.sh: the only arguments are none, which builds the module, and probe." >&2
+	exit 1
+	;;
+esac

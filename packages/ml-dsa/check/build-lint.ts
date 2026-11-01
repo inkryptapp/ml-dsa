@@ -92,7 +92,8 @@ function scriptWordFailure(word: string): string | undefined {
 		return "which uses $'…' quoting, whose escapes the lint can't read.";
 	}
 	const unquoted = word.replace(quoting, "");
-	if (braceExpansion.test(unquoted)) {
+	// A lone `{` is the keyword that opens a function body or a command group.
+	if (unquoted !== "{" && braceExpansion.test(unquoted)) {
 		return "which bash splits into words through a brace expansion that the lint can't follow.";
 	}
 	if (unquoted.includes("..")) {
