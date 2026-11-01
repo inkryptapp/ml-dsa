@@ -46,15 +46,11 @@
       ];
 
       wasm =
-        system:
-        let
-          pkgs = import nixpkgs {
-            inherit system;
-            config = { };
-            overlays = [ ];
-          };
-          llvm = pkgs.llvmPackages_22;
-        in
+        {
+          system,
+          pkgs,
+          llvm,
+        }:
         # A bare derivation runs no stdenv phases or setup hooks, and the
         # unwrapped clang adds no flags of its own, so build.sh holds every
         # flag.
@@ -76,10 +72,26 @@
     in
     {
       packages = builtins.listToAttrs (
-        map (system: {
-          name = system;
-          value.wasm = wasm system;
-        }) systems
+        map (
+          system:
+          let
+            pkgs = import nixpkgs {
+              inherit system;
+              config = { };
+              overlays = [ ];
+            };
+            llvm = pkgs.llvmPackages_22;
+          in
+          {
+            name = system;
+            value = {
+              wasm = wasm { inherit system pkgs llvm; };
+              # The clang that compiles the module. The check command runs it
+              # to probe upstream's headers and reads its version.
+              clang = llvm.clang-unwrapped;
+            };
+          }
+        ) systems
       );
     };
 }

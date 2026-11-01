@@ -169,12 +169,14 @@ describe("buildScriptFailures", () => {
 		]);
 	});
 
-	test("rejects a brace expansion, but not a parameter expansion", () => {
+	test("rejects a brace expansion, but not a parameter expansion or a lone brace", () => {
 		expect(
 			lint(
 				"cat {a,}/etc/passwd {,a}/etc {x,/}etc {a,{b,}}/etc {a,'/'}etc a{/,}b",
 				"cc -isystem {x,/}usr/include .{a,.}{b,/}.{c,.}{d,/}etc{e,/}passwd -{,}I/usr .{,}./etc",
 				'echo "${cflags[@]}" "$namespace${parameter_set}_$function"',
+				"build() {",
+				"}",
 			),
 		).toStrictEqual([
 			wordFailure(1, "{a,}/etc/passwd", brace),
