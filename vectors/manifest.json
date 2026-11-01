@@ -1,0 +1,140 @@
+{
+	"files": [
+		{
+			"file": "acvp/ML-DSA-keyGen-FIPS204/prompt.json",
+			"repository": "usnistgov/ACVP-Server",
+			"commit": "975de31eb83d87039ec88934fdc47d8c312b892d",
+			"path": "gen-val/json-files/ML-DSA-keyGen-FIPS204/prompt.json",
+			"url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files/ML-DSA-keyGen-FIPS204/prompt.json",
+			"sha256": "43e81ad820e495dbcad086fe27c1008393a8c32100bbbff77c558c3f06dcefef"
+		},
+		{
+			"file": "acvp/ML-DSA-keyGen-FIPS204/expectedResults.json",
+			"repository": "usnistgov/ACVP-Server",
+			"commit": "975de31eb83d87039ec88934fdc47d8c312b892d",
+			"path": "gen-val/json-files/ML-DSA-keyGen-FIPS204/expectedResults.json",
+			"url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files/ML-DSA-keyGen-FIPS204/expectedResults.json",
+			"sha256": "361f47ca19d592adcc66ff2cb591686ad785fea157b295648738bed6921a68df"
+		},
+		{
+			"file": "acvp/ML-DSA-sigGen-FIPS204/prompt.json",
+			"repository": "usnistgov/ACVP-Server",
+			"commit": "975de31eb83d87039ec88934fdc47d8c312b892d",
+			"path": "gen-val/json-files/ML-DSA-sigGen-FIPS204/prompt.json",
+			"url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files/ML-DSA-sigGen-FIPS204/prompt.json",
+			"sha256": "447749d72817b211160d243311ce32302f3023e59c355b0f70be2bd3e9e7830d"
+		},
+		{
+			"file": "acvp/ML-DSA-sigGen-FIPS204/expectedResults.json",
+			"repository": "usnistgov/ACVP-Server",
+			"commit": "975de31eb83d87039ec88934fdc47d8c312b892d",
+			"path": "gen-val/json-files/ML-DSA-sigGen-FIPS204/expectedResults.json",
+			"url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files/ML-DSA-sigGen-FIPS204/expectedResults.json",
+			"sha256": "228d011bbe274aeb93e22eea1e0d57b78f43795cf6a64fb5ef1e626485a0bedb"
+		},
+		{
+			"file": "acvp/ML-DSA-sigGen-FIPS204-tr1/prompt.json",
+			"repository": "usnistgov/ACVP-Server",
+			"commit": "975de31eb83d87039ec88934fdc47d8c312b892d",
+			"path": "gen-val/json-files/ML-DSA-sigGen-FIPS204-tr1/prompt.json",
+			"url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files/ML-DSA-sigGen-FIPS204-tr1/prompt.json",
+			"sha256": "0a81a213fb4825f0a9d8893a20445a3fed88a6f1832703548120b9588c74a08e"
+		},
+		{
+			"file": "acvp/ML-DSA-sigGen-FIPS204-tr1/expectedResults.json",
+			"repository": "usnistgov/ACVP-Server",
+			"commit": "975de31eb83d87039ec88934fdc47d8c312b892d",
+			"path": "gen-val/json-files/ML-DSA-sigGen-FIPS204-tr1/expectedResults.json",
+			"url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files/ML-DSA-sigGen-FIPS204-tr1/expectedResults.json",
+			"sha256": "8d86d120d128d2f2d29afb7843b7351677ac0f1bf649295d85b7bf3dd533949c"
+		},
+		{
+			"file": "acvp/ML-DSA-sigVer-FIPS204/prompt.json",
+			"repository": "usnistgov/ACVP-Server",
+			"commit": "975de31eb83d87039ec88934fdc47d8c312b892d",
+			"path": "gen-val/json-files/ML-DSA-sigVer-FIPS204/prompt.json",
+			"url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files/ML-DSA-sigVer-FIPS204/prompt.json",
+			"sha256": "e2cba4589389756fa0bea1a7e6837138bf0a81f9d14234c9ee8f6d33caa1654e"
+		},
+		{
+			"file": "acvp/ML-DSA-sigVer-FIPS204/expectedResults.json",
+			"repository": "usnistgov/ACVP-Server",
+			"commit": "975de31eb83d87039ec88934fdc47d8c312b892d",
+			"path": "gen-val/json-files/ML-DSA-sigVer-FIPS204/expectedResults.json",
+			"url": "https://raw.githubusercontent.com/usnistgov/ACVP-Server/975de31eb83d87039ec88934fdc47d8c312b892d/gen-val/json-files/ML-DSA-sigVer-FIPS204/expectedResults.json",
+			"sha256": "e1d84ef1b2f35196278ab0b0ed6a46ec62cc03d2dfa92c564199e1999bfb8ea6"
+		},
+		{
+			"file": "wycheproof/mldsa_44_sign_seed_test.json",
+			"repository": "C2SP/wycheproof",
+			"commit": "7a325932231bd7a724c791c8b0d65ea4d6d2f435",
+			"path": "testvectors_v1/mldsa_44_sign_seed_test.json",
+			"url": "https://raw.githubusercontent.com/C2SP/wycheproof/7a325932231bd7a724c791c8b0d65ea4d6d2f435/testvectors_v1/mldsa_44_sign_seed_test.json",
+			"sha256": "cc12df1c6c7dd5591195151ed2ae98708bf5de2df24bb06dc00b031f7c60b8cd"
+		},
+		{
+			"file": "wycheproof/mldsa_44_sign_noseed_test.json",
+			"repository": "C2SP/wycheproof",
+			"commit": "7a325932231bd7a724c791c8b0d65ea4d6d2f435",
+			"path": "testvectors_v1/mldsa_44_sign_noseed_test.json",
+			"url": "https://raw.githubusercontent.com/C2SP/wycheproof/7a325932231bd7a724c791c8b0d65ea4d6d2f435/testvectors_v1/mldsa_44_sign_noseed_test.json",
+			"sha256": "82191a3caf22c00a2c0686ca7e29dbf45b91b6d1c361bdd5687fb228d423d442"
+		},
+		{
+			"file": "wycheproof/mldsa_44_verify_test.json",
+			"repository": "C2SP/wycheproof",
+			"commit": "7a325932231bd7a724c791c8b0d65ea4d6d2f435",
+			"path": "testvectors_v1/mldsa_44_verify_test.json",
+			"url": "https://raw.githubusercontent.com/C2SP/wycheproof/7a325932231bd7a724c791c8b0d65ea4d6d2f435/testvectors_v1/mldsa_44_verify_test.json",
+			"sha256": "f70759c95146ff3057ae9708438f6e8d25ba822e3af11d2e87bb20d9a9c39d0e"
+		},
+		{
+			"file": "wycheproof/mldsa_65_sign_seed_test.json",
+			"repository": "C2SP/wycheproof",
+			"commit": "7a325932231bd7a724c791c8b0d65ea4d6d2f435",
+			"path": "testvectors_v1/mldsa_65_sign_seed_test.json",
+			"url": "https://raw.githubusercontent.com/C2SP/wycheproof/7a325932231bd7a724c791c8b0d65ea4d6d2f435/testvectors_v1/mldsa_65_sign_seed_test.json",
+			"sha256": "e26b2bb9ab8d45ed570ba6828c7e40b6fa3e1545bb8bc2c449c77531760133e0"
+		},
+		{
+			"file": "wycheproof/mldsa_65_sign_noseed_test.json",
+			"repository": "C2SP/wycheproof",
+			"commit": "7a325932231bd7a724c791c8b0d65ea4d6d2f435",
+			"path": "testvectors_v1/mldsa_65_sign_noseed_test.json",
+			"url": "https://raw.githubusercontent.com/C2SP/wycheproof/7a325932231bd7a724c791c8b0d65ea4d6d2f435/testvectors_v1/mldsa_65_sign_noseed_test.json",
+			"sha256": "a83aa58a50bad259d34e0ad626e7eacd095ee7ae80d9717c4cbe1c765edd7223"
+		},
+		{
+			"file": "wycheproof/mldsa_65_verify_test.json",
+			"repository": "C2SP/wycheproof",
+			"commit": "7a325932231bd7a724c791c8b0d65ea4d6d2f435",
+			"path": "testvectors_v1/mldsa_65_verify_test.json",
+			"url": "https://raw.githubusercontent.com/C2SP/wycheproof/7a325932231bd7a724c791c8b0d65ea4d6d2f435/testvectors_v1/mldsa_65_verify_test.json",
+			"sha256": "1ca235f61928421a173a171780beb00264ae9155dc33c52a11e1766cc7979034"
+		},
+		{
+			"file": "wycheproof/mldsa_87_sign_seed_test.json",
+			"repository": "C2SP/wycheproof",
+			"commit": "7a325932231bd7a724c791c8b0d65ea4d6d2f435",
+			"path": "testvectors_v1/mldsa_87_sign_seed_test.json",
+			"url": "https://raw.githubusercontent.com/C2SP/wycheproof/7a325932231bd7a724c791c8b0d65ea4d6d2f435/testvectors_v1/mldsa_87_sign_seed_test.json",
+			"sha256": "6e801c2916fee64e71cd845928513726cdbfe688ef41be4544e472e4d8742c8e"
+		},
+		{
+			"file": "wycheproof/mldsa_87_sign_noseed_test.json",
+			"repository": "C2SP/wycheproof",
+			"commit": "7a325932231bd7a724c791c8b0d65ea4d6d2f435",
+			"path": "testvectors_v1/mldsa_87_sign_noseed_test.json",
+			"url": "https://raw.githubusercontent.com/C2SP/wycheproof/7a325932231bd7a724c791c8b0d65ea4d6d2f435/testvectors_v1/mldsa_87_sign_noseed_test.json",
+			"sha256": "911e90bfc5a40e1ebed21580c079bb5e7233e6bd87a35fa285af5870ecfb79ad"
+		},
+		{
+			"file": "wycheproof/mldsa_87_verify_test.json",
+			"repository": "C2SP/wycheproof",
+			"commit": "7a325932231bd7a724c791c8b0d65ea4d6d2f435",
+			"path": "testvectors_v1/mldsa_87_verify_test.json",
+			"url": "https://raw.githubusercontent.com/C2SP/wycheproof/7a325932231bd7a724c791c8b0d65ea4d6d2f435/testvectors_v1/mldsa_87_verify_test.json",
+			"sha256": "54adffe10f6dad7941ffd97f77ad4e5c85cb3a54d44cf5ce1c95cb1757b9ba14"
+		}
+	]
+}

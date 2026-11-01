@@ -9,6 +9,7 @@ import { z } from "zod";
 import { wasmSteps } from "../packages/ml-dsa/check/steps.ts";
 import { CommandFailed, nix, root, type Step } from "./check-step.ts";
 import { pinGuardFailures, readPinState } from "./pin-guard.ts";
+import { vectorFailures } from "./vector-manifest.ts";
 
 const BrokenCases = z.array(z.string());
 
@@ -38,6 +39,7 @@ const { values } = parseArgs({
 
 const steps: readonly Step[] = [
 	{ name: "pin guard", run: () => pinGuardFailures(readPinState(root)) },
+	{ name: "vector manifest", run: () => vectorFailures(root) },
 	{ name: "flake rules", run: flakeRuleFailures },
 	...wasmSteps({ nativeOnly: values["native-only"] }),
 ];

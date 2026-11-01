@@ -9,8 +9,19 @@ import { maxContextBytes, seedBytes, randomnessBytes, type ObjectName } from "./
 /** The exported object and the operation that a call runs, such as `mlDsa44.keygen`. */
 export type Site = `${ObjectName}.${"keygen" | "sign" | "verify"}`;
 
-/** A byte input that a call checks. */
-export type ByteInput = "seed" | "message" | "context" | "randomness" | "publicKey" | "signature";
+/**
+ * A byte input that a call checks. Only the test-only entry point checks
+ * `secretKey` and `messageRepresentative`.
+ */
+export type ByteInput =
+	| "seed"
+	| "message"
+	| "context"
+	| "randomness"
+	| "publicKey"
+	| "signature"
+	| "secretKey"
+	| "messageRepresentative";
 
 /** A result of the `typeof` operator. */
 type TypeofResult =

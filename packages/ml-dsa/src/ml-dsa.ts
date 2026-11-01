@@ -1,11 +1,16 @@
-import { nullPointer, pointer } from "./brand.js";
 import { checkBytes, checkContext, checkExactBytes, checkRandomness, isAllZero } from "./bytes.js";
-import { regionBytes, runCore, type Instance, type Status } from "./core.js";
+import { regionBytes, runCore } from "./core.js";
 import {
 	writeMessageRepresentative,
 	writeVerifierMessageRepresentative,
 } from "./message-representative.js";
 import * as messages from "./messages.js";
+import {
+	deriveKeyPair,
+	secretKeyPublicKeyHash,
+	signMessageRepresentative,
+	verifyMessageRepresentative,
+} from "./operations.js";
 import { readOptions } from "./options.js";
 import {
 	maxContextBytes,
@@ -13,8 +18,8 @@ import {
 	randomnessBytes,
 	seedBytes,
 	type ObjectName,
+	type ParameterSet,
 } from "./parameter-sets.js";
-import { messageRepresentativeBytes, publicKeyHashOffset } from "./upstream.js";
 
 /** The byte lengths of one parameter set's inputs and outputs. */
 export interface Lengths<PublicKey extends number, Signature extends number> {
@@ -186,8 +191,6 @@ export interface MlDsa<Name extends string, PublicKey extends number, Signature 
 	readonly verify: (options: VerifyOptions) => boolean;
 }
 
-type ParameterSet<Key extends ObjectName> = (typeof parameterSets)[Key];
-
 // The read step reads the known keys in this order, which is also the order
 // of the input checks.
 const signKeys = ["seed", "message", "context", "randomness"] as const;
@@ -212,22 +215,6 @@ function createMlDsa<Key extends ObjectName>(
 			signature: set.signature,
 			maxContext: maxContextBytes,
 		});
-	/**
-	 * Copies the seed into its region and derives the key pair into the
-	 * `publicKey` and `secretKey` regions.
-	 *
-	 * @returns `null`, or the status of a non-zero return code.
-	 */
-	const deriveKeyPair = (instance: Instance, seedView: Uint8Array): Status | null => {
-		const { regions, functions } = instance;
-		regionBytes(instance, regions.seed).set(seedView);
-		const code = functions[set.keypairExport](
-			regions.publicKey.pointer,
-			regions.secretKey.pointer,
-			regions.seed.pointer,
-		);
-		return code === 0 ? null : { kind: "status", code };
-	};
 	// Arrow functions have no `prototype`, so each function's own keys are
 	// exactly `length` and `name`.
 	const keygen = (seed: Uint8Array): KeygenResult => {
@@ -236,7 +223,7 @@ function createMlDsa<Key extends ObjectName>(
 			throw new RangeError(messages.allZero(keygenSite, "seed"));
 		}
 		return runCore(keygenSite, (instance) => {
-			const keyPairStatus = deriveKeyPair(instance, seedView);
+			const keyPairStatus = deriveKeyPair(instance, set, seedView);
 			if (keyPairStatus !== null) {
 				return keyPairStatus;
 			}
@@ -257,48 +244,21 @@ function createMlDsa<Key extends ObjectName>(
 			throw new RangeError(messages.allZero(signSite, "randomness"));
 		}
 		return runCore(signSite, (instance, initShake) => {
-			const { regions, functions } = instance;
-			const keyPairStatus = deriveKeyPair(instance, seedView);
+			const keyPairStatus = deriveKeyPair(instance, set, seedView);
 			if (keyPairStatus !== null) {
 				return keyPairStatus;
 			}
-			const publicKeyHash = pointer(regions.secretKey.pointer + publicKeyHashOffset);
 			const prefixStatus = writeMessageRepresentative(
 				instance,
 				initShake,
-				publicKeyHash,
+				secretKeyPublicKeyHash(instance),
 				contextView,
 				messageView,
 			);
 			if (prefixStatus !== null) {
 				return prefixStatus;
 			}
-			const randomnessRegion = regionBytes(instance, regions.randomness);
-			if (randomness === "deterministic") {
-				randomnessRegion.fill(0);
-			} else {
-				randomnessRegion.set(randomness);
-			}
-			// The last argument asks for external mu, so upstream reads the
-			// message representative in place of a message and ignores the
-			// prefix arguments.
-			const signatureCode = functions[set.signatureExport](
-				regions.signature.pointer,
-				regions.messageRepresentative.pointer,
-				messageRepresentativeBytes,
-				nullPointer,
-				0,
-				regions.randomness.pointer,
-				regions.secretKey.pointer,
-				1,
-			);
-			if (signatureCode !== 0) {
-				return { kind: "status", code: signatureCode };
-			}
-			return {
-				kind: "done",
-				output: regionBytes(instance, regions.signature).slice(0, set.signature),
-			};
+			return signMessageRepresentative(instance, set, randomness);
 		});
 	};
 	const verify = (options: VerifyOptions): boolean => {
@@ -319,8 +279,7 @@ function createMlDsa<Key extends ObjectName>(
 			);
 			const contextView = checkContext(verifySite, values.get("context"));
 			return runCore(verifySite, (instance, initShake) => {
-				const { regions, functions } = instance;
-				regionBytes(instance, regions.signature).set(signatureView);
+				regionBytes(instance, instance.regions.signature).set(signatureView);
 				const prefixStatus = writeVerifierMessageRepresentative(
 					instance,
 					initShake,
@@ -331,12 +290,7 @@ function createMlDsa<Key extends ObjectName>(
 				if (prefixStatus !== null) {
 					return prefixStatus;
 				}
-				const code = functions[set.verifyExport](
-					regions.signature.pointer,
-					regions.messageRepresentative.pointer,
-					regions.publicKey.pointer,
-				);
-				return { kind: "done", output: code === 0 };
+				return { kind: "done", output: verifyMessageRepresentative(instance, set) };
 			});
 		} catch {
 			return false;

@@ -45,6 +45,9 @@ export const parameterSets = {
 /** The name of an exported object, such as `mlDsa44`. */
 export type ObjectName = keyof typeof parameterSets;
 
+/** The entry of {@link parameterSets} for `Key`, or any entry by default. */
+export type ParameterSet<Key extends ObjectName = ObjectName> = (typeof parameterSets)[Key];
+
 /** The largest value of one length field across the parameter sets, which sizes a region. */
 export function longest(field: "publicKey" | "secretKey" | "signature"): number {
 	return Math.max(...Object.values(parameterSets).map((set) => set[field]));

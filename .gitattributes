@@ -1,0 +1,7 @@
+# The vector files must stay byte-identical to their source repositories,
+# because the check compares their SHA-256 with vectors/manifest.json. Git never converts their
+# line endings, never diffs them, and GitHub collapses them in reviews.
+vectors/** -text -diff linguist-generated
+# The manifest stays an ordinary file, so a vector update shows its new
+# hashes in the diff.
+vectors/manifest.json !text !diff !linguist-generated

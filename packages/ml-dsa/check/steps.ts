@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,6 +17,7 @@ import {
 
 const buildScript = "packages/ml-dsa/wasm/build.sh";
 const committedModule = "packages/ml-dsa/wasm/mldsa.wasm";
+const vectorTest = "packages/ml-dsa/test/vectors.test.ts";
 
 function installable(system: System): string {
 	return `.#packages.${system}.wasm`;
@@ -64,10 +66,34 @@ function moduleRebuildFailures(nativeOnly: boolean): readonly string[] {
 	return rebuildFailures(committedModule, committedHash, results);
 }
 
+/**
+ * Runs the vector test, which routes the ACVP and Wycheproof cases through
+ * the committed module and prints the count per path and the cases per
+ * segment.
+ */
+function vectorTestFailures(): readonly string[] {
+	// When Vitest detects a coding agent, such as through `AI_AGENT`, its
+	// default reporter hides a passing test's output, and the counts are that
+	// output.
+	const args = ["test", "run", "--silent=false", vectorTest];
+	const result = spawnSync(join(root, "node_modules/.bin/vp"), args, {
+		cwd: root,
+		stdio: "inherit",
+	});
+	if (result.error !== undefined) {
+		throw result.error;
+	}
+	if (result.status !== 0) {
+		return [`\`vp ${args.join(" ")}\` failed. Its output above says which cases failed and why.`];
+	}
+	return [];
+}
+
 /** The wasm port's steps of the check command, in order. */
 export function wasmSteps(options: { readonly nativeOnly: boolean }): readonly Step[] {
 	return [
 		{ name: "build lint", run: buildLintFailures },
 		{ name: "wasm module rebuilds", run: () => moduleRebuildFailures(options.nativeOnly) },
+		{ name: "vectors", run: vectorTestFailures },
 	];
 }
