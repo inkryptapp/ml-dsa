@@ -9,8 +9,8 @@ import { messageRepresentativeBytes, publicKeyHashBytes, pureMlDsa } from "./ups
  * message, into one SHAKE256 state, and squeezes 64 bytes. The message streams
  * through the `chunk` region, so its length has no cap.
  *
- * `sign`, `verify`, and the test-only entry point all compute the message
- * representative here, so the absorb order lives in one place.
+ * `sign`, `verify`, and the test-only signing from a secret key compute the
+ * message representative of pure ML-DSA here.
  *
  * @returns `null`, or a status with code 0 if the prefix function returned a
  * zero length. Only an internal error can cause that, because the context's
@@ -39,7 +39,39 @@ export function writeMessageRepresentative(
 	if (prefixLength === 0) {
 		return { kind: "status", code: prefixLength };
 	}
+	absorbMessageRepresentative(instance, initShake, publicKeyHash, prefixLength, message);
+	return null;
+}
 
+/**
+ * Writes the message representative that `ML-DSA.Sign_internal` and
+ * `ML-DSA.Verify_internal` in FIPS 204 compute from the message that they
+ * take, with the same absorb order as {@link writeMessageRepresentative} and
+ * an empty domain-separation prefix. Only the test-only entry point calls it.
+ */
+export function writeInternalMessageRepresentative(
+	instance: Instance,
+	initShake: InitShake,
+	publicKeyHash: Pointer,
+	message: Uint8Array,
+): void {
+	absorbMessageRepresentative(instance, initShake, publicKeyHash, 0, message);
+}
+
+/**
+ * Absorbs the public-key hash, the first `prefixLength` bytes of the `prefix`
+ * region, and the message into a new SHAKE256 state, and squeezes the message
+ * representative into its region. Pure ML-DSA and the internal interface both
+ * absorb through it, so the absorb order lives in one place.
+ */
+function absorbMessageRepresentative(
+	instance: Instance,
+	initShake: InitShake,
+	publicKeyHash: Pointer,
+	prefixLength: number,
+	message: Uint8Array,
+): void {
+	const { regions, functions } = instance;
 	const state = regions.shakeState.pointer;
 	const chunk = regionBytes(instance, regions.chunk);
 	const chunkBytes = regions.chunk.length;
@@ -58,14 +90,30 @@ export function writeMessageRepresentative(
 		messageRepresentativeBytes,
 		state,
 	);
-	return null;
+}
+
+/**
+ * Copies the public key into the `publicKey` region and writes its public-key
+ * hash to the `publicKeyHash` region.
+ */
+export function writePublicKeyHash(
+	instance: Instance,
+	initShake: InitShake,
+	publicKey: Uint8Array,
+): void {
+	const { regions, functions } = instance;
+	const state = regions.shakeState.pointer;
+	regionBytes(instance, regions.publicKey).set(publicKey);
+	initShake();
+	functions.mldsa_shake256_absorb(state, regions.publicKey.pointer, publicKey.length);
+	functions.mldsa_shake256_finalize(state);
+	functions.mldsa_shake256_squeeze(regions.publicKeyHash.pointer, publicKeyHashBytes, state);
 }
 
 /**
  * Writes the message representative that `verify` checks a signature against.
- * It copies the public key into the `publicKey` region, writes its public-key
- * hash to the `publicKeyHash` region, then calls
- * {@link writeMessageRepresentative} with that hash.
+ * It calls {@link writePublicKeyHash}, then {@link writeMessageRepresentative}
+ * with that hash.
  *
  * @returns What {@link writeMessageRepresentative} returns.
  */
@@ -76,17 +124,11 @@ export function writeVerifierMessageRepresentative(
 	context: Uint8Array,
 	message: Uint8Array,
 ): Status | null {
-	const { regions, functions } = instance;
-	const state = regions.shakeState.pointer;
-	regionBytes(instance, regions.publicKey).set(publicKey);
-	initShake();
-	functions.mldsa_shake256_absorb(state, regions.publicKey.pointer, publicKey.length);
-	functions.mldsa_shake256_finalize(state);
-	functions.mldsa_shake256_squeeze(regions.publicKeyHash.pointer, publicKeyHashBytes, state);
+	writePublicKeyHash(instance, initShake, publicKey);
 	return writeMessageRepresentative(
 		instance,
 		initShake,
-		regions.publicKeyHash.pointer,
+		instance.regions.publicKeyHash.pointer,
 		context,
 		message,
 	);

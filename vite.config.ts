@@ -6,6 +6,10 @@ import { lintFixturesEnvVar, lintFixturesFolder, lintFixturesOn } from "./lint-f
 
 const vendoredSource = "vendor/mldsa-native";
 
+// The vector files must stay byte-identical to their source repositories,
+// so the formatter, which the pre-commit hook also runs, never rewrites them.
+const vectorFolder = "vectors";
+
 const ignoredLintFixtures =
 	process.env[lintFixturesEnvVar] === lintFixturesOn ? [] : [lintFixturesFolder];
 
@@ -73,7 +77,7 @@ export default defineConfig({
 	},
 	fmt: {
 		useTabs: true,
-		ignorePatterns: [vendoredSource],
+		ignorePatterns: [vendoredSource, vectorFolder],
 	},
 	staged: {
 		// Given paths, `vp check --fix` applies oxlint's safe fixes and oxfmt, and
