@@ -45,8 +45,12 @@
         "x86_64-linux"
       ];
 
+      # Runs build.sh in `mode`: `build` for the module and its twin, or
+      # `debug` for the -g module that the check command's path scan reads.
       wasm =
         {
+          name,
+          mode,
           system,
           pkgs,
           llvm,
@@ -55,10 +59,12 @@
         # unwrapped clang adds no flags of its own, so build.sh holds every
         # flag.
         derivation {
-          name = "mldsa-wasm";
-          inherit system;
+          inherit name system;
           builder = "${pkgs.bash}/bin/bash";
-          args = [ ./packages/ml-dsa/wasm/build.sh ];
+          args = [
+            ./packages/ml-dsa/wasm/build.sh
+            mode
+          ];
           PATH = "${pkgs.coreutils}/bin";
           CC = "${llvm.clang-unwrapped}/bin/clang";
           WASM_LD = "${llvm.lld}/bin/wasm-ld";
@@ -85,10 +91,24 @@
           {
             name = system;
             value = {
-              wasm = wasm { inherit system pkgs llvm; };
+              wasm = wasm {
+                name = "mldsa-wasm";
+                mode = "build";
+                inherit system pkgs llvm;
+              };
+              wasm-debug = wasm {
+                name = "mldsa-wasm-debug";
+                mode = "debug";
+                inherit system pkgs llvm;
+              };
               # The clang that compiles the module. The check command runs it
               # to probe upstream's headers and reads its version.
               clang = llvm.clang-unwrapped;
+              # The tools that the check command's feature probe runs with the
+              # pinned clang: wasm-ld, llc, and the validator.
+              lld = llvm.lld;
+              llvm = llvm.llvm;
+              wasm-tools = pkgs.wasm-tools;
             };
           }
         ) systems

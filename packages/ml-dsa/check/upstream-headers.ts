@@ -90,8 +90,8 @@ export function failingLayoutLine(constants: readonly LayoutConstant[]): string 
 }
 
 /**
- * Splits the output of `build.sh probe` into its sections, keyed by the text
- * after `@@ ` on each section line.
+ * Splits the output of a probe, such as `build.sh probe` or `features.sh`,
+ * into its sections, keyed by the text after `@@ ` on each section line.
  *
  * @throws CommandFailed if the output doesn't start with a section line or repeats one.
  */

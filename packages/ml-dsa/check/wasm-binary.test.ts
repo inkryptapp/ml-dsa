@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { describe, expect, test } from "vite-plus/test";
 
 import { root } from "../../../scripts/check-step.ts";
-import { readModule, readProducers, WasmFormatError } from "./wasm-binary.ts";
+import { functionNames, readModule, readProducers, WasmFormatError } from "./wasm-binary.ts";
 import {
 	customSection,
 	functionType,
 	name,
+	nameSection,
 	producersSection,
 	s32,
 	section,
@@ -34,6 +35,9 @@ declare const WebAssembly: {
 };
 
 const { i32, i64, funcref } = valueType;
+
+const codeContents = vector([[...u32(4), 0x00, 0x20, 0x00, 0x0b]]);
+const producers = producersSection([["processed-by", [["clang", "22.1.5"]]]]);
 
 /** A module with one item of every kind that the reader decodes. */
 const everySection = wasmModule(
@@ -65,8 +69,8 @@ const everySection = wasmModule(
 			[...name("t"), 0x01, ...u32(0)],
 		]),
 	),
-	section(10, vector([[...u32(4), 0x00, 0x20, 0x00, 0x0b]])),
-	producersSection([["processed-by", [["clang", "22.1.5"]]]]),
+	section(10, codeContents),
+	producers,
 );
 
 /** The reader's format error for `bytes`, or `undefined` if it reads them. */
@@ -83,7 +87,7 @@ function readError(bytes: Uint8Array): string | undefined {
 }
 
 describe("readModule", () => {
-	test("reads every section that it decodes, and skips the code section", () => {
+	test("reads every section that it decodes, and keeps the code section's contents", () => {
 		expect(readModule(everySection)).toStrictEqual({
 			types: [
 				{ params: ["i32", "i32", "i32"], results: [] },
@@ -107,14 +111,11 @@ describe("readModule", () => {
 				{ name: "g", kind: "global", index: 1 },
 				{ name: "t", kind: "table", index: 0 },
 			],
-			customSections: [
-				{
-					name: "producers",
-					bytes: new Uint8Array(
-						producersSection([["processed-by", [["clang", "22.1.5"]]]]).slice(12),
-					),
-				},
-			],
+			code: {
+				offset: everySection.length - producers.length - codeContents.length,
+				bytes: new Uint8Array(codeContents),
+			},
+			customSections: [{ name: "producers", bytes: new Uint8Array(producers.slice(12)) }],
 		});
 	});
 
@@ -260,6 +261,46 @@ describe("readModule", () => {
 		expect(readError(wasmModule(section(6, vector([extendedConst]))))).toBe(
 			"At byte 17: the opcode 0x6a can't appear in a constant expression.",
 		);
+	});
+});
+
+describe("functionNames", () => {
+	test("reads the function names, skipping the other subsections", () => {
+		const module = readModule(
+			wasmModule(
+				nameSection(
+					[0, name("mod")],
+					[
+						1,
+						vector([
+							[...u32(0), ...name("first")],
+							[...u32(2), ...name("third")],
+						]),
+					],
+					[7, vector([[...u32(0), ...name("__stack_pointer")]])],
+				),
+			),
+		);
+		expect(functionNames(module)).toStrictEqual(
+			new Map([
+				[0, "first"],
+				[2, "third"],
+			]),
+		);
+	});
+
+	test("gives an empty map for a module without a name section", () => {
+		expect(functionNames(readModule(wasmModule()))).toStrictEqual(new Map());
+	});
+
+	test("rejects a second name section and a subsection with bytes after its names", () => {
+		const section = nameSection([1, vector([])]);
+		expect(() => functionNames(readModule(wasmModule(section, section)))).toThrow(
+			"the module has more than one name section.",
+		);
+		expect(() =>
+			functionNames(readModule(wasmModule(nameSection([1, [...vector([]), 0x00]])))),
+		).toThrow("the function names subsection has bytes after its last name.");
 	});
 });
 

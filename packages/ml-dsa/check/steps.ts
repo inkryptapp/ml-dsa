@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { z } from "zod";
@@ -14,7 +14,20 @@ import {
 } from "../../../scripts/ct-matrix.ts";
 import { submodulePath } from "../../../scripts/pin-guard.ts";
 import { buildScriptFailures, derivationFailures } from "./build-lint.ts";
+import { expectedCounts } from "./expected-counts.ts";
 import { buildScript, ctActionFile, ctWorkflowFile, moduleFile } from "./files.ts";
+import {
+	debugInfoFailures,
+	hostPathFailures,
+	negativeFixtureFailures,
+	prefixMapNames,
+	scanPatterns,
+} from "./host-paths.ts";
+import {
+	countTotals,
+	declassificationFailures,
+	instructionCountFailures,
+} from "./instruction-counts.ts";
 import {
 	declarationFailures,
 	exportEntries,
@@ -34,6 +47,13 @@ import {
 	type System,
 } from "./rebuild.ts";
 import { snapshotFailures } from "./snapshot.ts";
+import {
+	featureFolder,
+	featureProbeArguments,
+	featureProbeFailures,
+	featureTable,
+	targetFeatureFailures,
+} from "./target-features.ts";
 import { optimizationLevels, toolchainFailures } from "./toolchain.ts";
 import {
 	configDiffFile,
@@ -50,14 +70,18 @@ const sizesFile = "packages/ml-dsa/wasm/sizes.json";
 const includeFolder = "packages/ml-dsa/wasm/include";
 const stackMarginTest = "packages/ml-dsa/test/stack-margin.test.ts";
 const vectorTest = "packages/ml-dsa/test/vectors.test.ts";
+const featureScript = "packages/ml-dsa/check/features.sh";
 
 // The rebuild step has already evaluated the flake, whose rules in
 // nix/lib.nix validate the file, so the checks read only the sizes that they
 // compare.
 const Sizes = z.looseObject({ memoryBytes: z.number(), stackBytes: z.number() });
 
-function installable(system: System): string {
-	return `.#packages.${system}.wasm`;
+/** The roots that the derivation hands the build, as `nix eval` prints them. */
+const BuildRoots = z.object({ MLDSA_NATIVE: z.string(), INCLUDE: z.string() });
+
+function installable(system: System, name = "wasm"): string {
+	return `.#packages.${system}.${name}`;
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -67,22 +91,35 @@ function sha256(bytes: Uint8Array): string {
 function buildLintFailures(): readonly string[] {
 	const script = readFileSync(join(root, buildScript), "utf8");
 	const derivations: unknown = JSON.parse(
-		nix(["derivation", "show", ...systems.map(installable)]).toString("utf8"),
+		nix([
+			"derivation",
+			"show",
+			...systems.flatMap((system) => [installable(system), installable(system, "wasm-debug")]),
+		]).toString("utf8"),
 	);
 	return [...buildScriptFailures(buildScript, script), ...derivationFailures(derivations)];
+}
+
+/**
+ * Builds `target` and returns its store path, whose name must be `name`. A
+ * build that the store already holds returns at once.
+ */
+function buildOutput(target: string, name: string, flags: readonly string[] = []): string {
+	const storePath = nix(["build", "--no-link", "--print-out-paths", ...flags, target])
+		.toString("utf8")
+		.trim();
+	if (!new RegExp(`^/nix/store/[0-9a-z]{32}-${name}$`).test(storePath)) {
+		throw new CommandFailed(
+			`\`nix build\` printed ${JSON.stringify(storePath)} instead of one store path.`,
+		);
+	}
+	return storePath;
 }
 
 function buildModule(build: Build): BuildResult {
 	const emulationFlags = build.emulated ? ["--option", "extra-platforms", build.system] : [];
 	const target = installable(build.system);
-	const storePath = nix(["build", "--no-link", "--print-out-paths", ...emulationFlags, target])
-		.toString("utf8")
-		.trim();
-	if (!/^\/nix\/store\/[0-9a-z]{32}-mldsa-wasm$/.test(storePath)) {
-		throw new CommandFailed(
-			`\`nix build\` printed ${JSON.stringify(storePath)} instead of one store path.`,
-		);
-	}
+	const storePath = buildOutput(target, "mldsa-wasm", emulationFlags);
 	// The rebuild runs the compiler even when the store already holds the
 	// output, and Nix fails it unless both runs give the same bytes.
 	nix(["build", "--no-link", "--rebuild", ...emulationFlags, target]);
@@ -122,16 +159,19 @@ function readCommittedModule(): WasmModule {
 }
 
 /**
- * Runs `check`, and turns an error that says the committed module or
- * upstream's CT workflow or action has a shape that the check can't read into
- * a failure.
+ * Runs `check`, and turns an error that says a module or upstream's CT
+ * workflow or action has a shape that the check can't read into a failure.
+ * `module` names the module that `check` reads, the committed one by default.
  */
-function failOnUnreadable(check: () => readonly string[]): readonly string[] {
+function failOnUnreadable(
+	check: () => readonly string[],
+	module: string = moduleFile,
+): readonly string[] {
 	try {
 		return check();
 	} catch (error) {
 		if (error instanceof WasmFormatError) {
-			return [`The check can't read ${moduleFile}. ${error.message}`];
+			return [`The check can't read ${module}. ${error.message}`];
 		}
 		if (error instanceof CtMatrixError) {
 			return [`The check can't follow upstream's CT setup in ${submodulePath}. ${error.message}`];
@@ -223,6 +263,115 @@ function headerProbeFailures(native: System, ctConfig: readonly string[]): reado
 	});
 }
 
+/** Reads the unstripped twin of the native build, which the rebuild step has already built. */
+function readTwinBytes(native: System): Buffer {
+	const storePath = buildOutput(installable(native), "mldsa-wasm");
+	return nix(["store", "cat", `${storePath}/mldsa.unstripped.wasm`]);
+}
+
+function readVendoredFile(file: string): string | undefined {
+	return readIfPresent(`${submodulePath}/${file}`);
+}
+
+function instructionCountStepFailures(native: System): readonly string[] {
+	return failOnUnreadable(() => {
+		const shipped = readCommittedModule();
+		const twinBytes = readTwinBytes(native);
+		return failOnUnreadable(() => {
+			const twin = readModule(twinBytes);
+			const failures = instructionCountFailures({ shipped, twin, expected: expectedCounts });
+			if (failures.length === 0) {
+				const totals = [...countTotals(twin)].map(([name, count]) => `${String(count)} ${name}`);
+				console.log(`  the twin's counts: ${totals.join(", ")}`);
+			}
+			return [...failures, ...declassificationFailures(expectedCounts, readVendoredFile)];
+		}, "the unstripped twin");
+	});
+}
+
+/** The file names of the `.wat` and `.wasm` fixtures in the feature folder. */
+function featureFixtures(): readonly string[] {
+	return readdirSync(join(root, featureFolder)).filter((file) => /\.(?:wat|wasm)$/.test(file));
+}
+
+/**
+ * Runs `features.sh` with the pinned clang, wasm-ld, llc, and wasm-tools,
+ * which validates the committed module and the feature fixtures, and runs
+ * each compiler witness.
+ */
+function targetFeatureStepFailures(native: System): readonly string[] {
+	const sectionFailures = failOnUnreadable(() => targetFeatureFailures(readCommittedModule()));
+	const tools = ["clang", "lld", "llvm", "wasm-tools"].map((name) => installable(native, name));
+	const output = nix([
+		"shell",
+		...tools,
+		"--command",
+		"bash",
+		featureScript,
+		...featureProbeArguments(featureTable),
+	]).toString("utf8");
+	return [
+		...sectionFailures,
+		...featureProbeFailures({
+			sections: probeSections(output),
+			table: featureTable,
+			fixtures: featureFixtures(),
+		}),
+	];
+}
+
+/**
+ * Builds the -g module, computes the roots that its build read, and scans
+ * the committed module, the twin, and the -g module for them. The negative
+ * fixture first proves that the scan finds each pattern.
+ */
+function hostPathStepFailures(native: System): readonly string[] {
+	const debugPath = buildOutput(installable(native, "wasm-debug"), "mldsa-wasm-debug");
+	const debugBytes = nix(["store", "cat", `${debugPath}/mldsa.debug.wasm`]);
+	const buildFolder = nix(["store", "cat", `${debugPath}/build-folder`])
+		.toString("utf8")
+		.trim();
+	const inputs = BuildRoots.parse(
+		JSON.parse(
+			nix([
+				"eval",
+				"--json",
+				installable(native, "wasm-debug"),
+				"--apply",
+				"build: { inherit (build) MLDSA_NATIVE INCLUDE; }",
+			]).toString("utf8"),
+		),
+	);
+	const resourceFolder = nix([
+		"shell",
+		installable(native, "clang"),
+		"--command",
+		"clang",
+		"-print-resource-dir",
+	])
+		.toString("utf8")
+		.trim();
+	const roots = [
+		{ name: "the -g build's folder", path: buildFolder },
+		{ name: "the vendored source", path: inputs.MLDSA_NATIVE },
+		{ name: "the include folder", path: inputs.INCLUDE },
+		{ name: "clang's resource folder", path: resourceFolder },
+	];
+	for (const { name, path } of roots) {
+		console.log(`  ${name}: ${path}`);
+	}
+	const patterns = scanPatterns(roots);
+	const twinBytes = readTwinBytes(native);
+	const mapNames = prefixMapNames(readFileSync(join(root, buildScript), "utf8"));
+	return [
+		...negativeFixtureFailures(patterns),
+		...failOnUnreadable(() => debugInfoFailures(readModule(debugBytes), mapNames), "the -g build"),
+		...hostPathFailures(moduleFile, readFileSync(join(root, moduleFile)), patterns),
+		...hostPathFailures("The unstripped twin", twinBytes, patterns),
+		...hostPathFailures("The -g build", debugBytes, patterns),
+	];
+}
+
 /** Runs one test file and fails when a test in it fails. */
 function testFileFailures(file: string): readonly string[] {
 	// When Vitest detects a coding agent, such as through `AI_AGENT`, its
@@ -253,6 +402,9 @@ export function wasmSteps(options: { readonly nativeOnly: boolean }): readonly S
 		{ name: "toolchain match", run: () => onNativeSystem(toolchainMatchFailures) },
 		{ name: "module interface", run: interfaceFailures },
 		{ name: "upstream headers", run: () => onNativeSystem(upstreamHeaderFailures) },
+		{ name: "instruction counts", run: () => onNativeSystem(instructionCountStepFailures) },
+		{ name: "target features", run: () => onNativeSystem(targetFeatureStepFailures) },
+		{ name: "host paths", run: () => onNativeSystem(hostPathStepFailures) },
 		// The stack-margin test prints the wasm stack peak of every operation.
 		{ name: "stack margin", run: () => testFileFailures(stackMarginTest) },
 		// The vector test routes the ACVP and Wycheproof cases through the
