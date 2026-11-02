@@ -31,3 +31,10 @@ declare module "*.wasm" {
 	const base64: string;
 	export default base64;
 }
+
+// A `.wasm?module` import gives the compiled module, which the workerd entry
+// instantiates.
+declare module "*.wasm?module" {
+	const compiled: WebAssembly.Module;
+	export default compiled;
+}
