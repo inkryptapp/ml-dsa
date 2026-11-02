@@ -182,6 +182,21 @@ export function readVerifiedVectors(root: string): ReadonlyMap<string, Uint8Arra
 }
 
 /**
+ * The SHA-256 of each file that the manifest lists, keyed by the file's path
+ * in the `vectors` folder. The package checks use it to find a vector file in
+ * the tarball.
+ *
+ * @throws Error when the manifest is missing or doesn't match its schema.
+ */
+export function manifestHashes(root: string): ReadonlyMap<string, string> {
+	const entries = readManifest(root);
+	if (typeof entries === "string") {
+		throw new Error(entries);
+	}
+	return new Map(entries.map((entry) => [entry.file, entry.sha256]));
+}
+
+/**
  * Fetches each file's URL and compares the served bytes with the committed
  * file. It fetches only if the offline check passes, so each committed file
  * already has its manifest SHA-256, and the comparison checks the served

@@ -254,6 +254,30 @@ describe("the structural check of the core", () => {
 		]);
 	});
 
+	// The pack build drops the braces around a single statement, so the check
+	// reads the shipped entry files in that form.
+	test("passes the core with the braces of one-statement bodies dropped", () => {
+		const unbraced = [
+			[
+				"if (checkedOut !== held) {\n\t\t\t\tpoisoned = true;\n\t\t\t}",
+				"if (checkedOut !== held) poisoned = true;",
+			],
+			["if (!poisoned) {\n\t\t\t\tslot = held;\n\t\t\t}", "if (!poisoned) slot = held;"],
+			[
+				"if (checkedOut === held) {\n\t\t\t\tcheckedOut = null;\n\t\t\t}\n\t\t}",
+				"if (checkedOut === held) checkedOut = null;\n\t\t}",
+			],
+			[
+				"index += 1) {\n\t\t\t\t\t\twords[index] = 0;\n\t\t\t\t\t}",
+				"index += 1) words[index] = 0;",
+			],
+		].reduce((text, [before = "", after = ""]) => {
+			expect(text).toContain(before);
+			return text.replace(before, after);
+		}, source);
+		expect(coreStructureFailures(file, unbraced)).toStrictEqual([]);
+	});
+
 	test("fails unless the source holds exactly one core function", () => {
 		expect(
 			coreStructureFailures(file, source.replace("function runCore", "function runOther")),
