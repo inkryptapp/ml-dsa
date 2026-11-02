@@ -101,6 +101,12 @@ let
       })
     );
 
+    "pnpmVersion reads the version" = gives "12.16.1" (lib.pnpmVersion "pnpm@12.16.1");
+    "pnpmVersion rejects a missing field" = throws (lib.pnpmVersion null);
+    "pnpmVersion rejects another package manager" = throws (lib.pnpmVersion "npm@11.12.1");
+    "pnpmVersion rejects a version range" = throws (lib.pnpmVersion "pnpm@^12.16.1");
+    "pnpmVersion rejects a hash suffix" = throws (lib.pnpmVersion "pnpm@12.16.1+sha512.abc");
+
     "sizes accepts valid sizes" = gives sizes (lib.sizes sizes);
     "sizes rejects a value that isn't an object" = throws (lib.sizes [ ]);
     "sizes rejects a missing key" = throws (lib.sizes (removeAttrs sizes [ "chunkBytes" ]));

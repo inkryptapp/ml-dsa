@@ -1,1 +1,7 @@
 node_modules/
+# `vp pack` writes these into the package folder.
+packages/ml-dsa/dist/
+packages/ml-dsa/LICENSE
+packages/ml-dsa/LICENSE-mldsa-native
+# The check command writes each system's tarball here.
+packages/ml-dsa/packed/

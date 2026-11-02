@@ -1,8 +1,9 @@
 /**
  * The structural check of the core function. Its cleanup must still run when
  * too little engine stack is left to start a function call, a `new`, or a
- * getter. So the check parses the TypeScript source, finds the core function
- * by name, and walks every `catch` and `finally` block inside it.
+ * getter. So the check parses the TypeScript source and each shipped entry
+ * file, finds the core function by name, and walks every `catch` and
+ * `finally` block inside it.
  *
  * Those blocks may hold only these:
  *
@@ -40,9 +41,9 @@
  * so code written to evade them, for example through a `const` local that
  * holds a Proxy, can still run code in the cleanup. Review covers that.
  */
-import { parseAst } from "vite/rolldown/parseAst";
+import { child, children, field, nameOf, parseProgram, walk, type Node } from "./estree.ts";
 
-/** The name of the core function, which appears exactly once in the source. */
+/** The name of the core function, which appears exactly once in each file that the check reads. */
 const coreFunction = "runCore";
 
 /** The bindings that a `catch` or `finally` block of the core may assign anywhere. */
@@ -56,53 +57,6 @@ const placed: ReadonlyMap<string, string> = new Map([
 	["slot", "the put-back"],
 	["checkedOut", "the clear of `checkedOut`"],
 ]);
-
-/** An ESTree node, with the offset of its first character. */
-interface Node {
-	readonly type: string;
-	readonly start: number;
-}
-
-function isNode(value: unknown): value is Node {
-	return (
-		typeof value === "object" && value !== null && typeof Reflect.get(value, "type") === "string"
-	);
-}
-
-function child(node: Node, key: string): Node | null {
-	const value: unknown = Reflect.get(node, key);
-	return isNode(value) ? value : null;
-}
-
-function children(node: Node, key: string): readonly Node[] {
-	const value: unknown = Reflect.get(node, key);
-	return Array.isArray(value) ? value.filter(isNode) : [];
-}
-
-function field(node: Node, key: string): unknown {
-	return Reflect.get(node, key);
-}
-
-/** Every node under `node`, depth first and in source order, with `node` itself. */
-function* walk(node: Node): Generator<Node> {
-	yield node;
-	for (const value of Object.values(node)) {
-		const nodes: readonly unknown[] = Array.isArray(value) ? value : [value];
-		for (const item of nodes) {
-			if (isNode(item)) {
-				yield* walk(item);
-			}
-		}
-	}
-}
-
-function nameOf(node: Node | null): string | null {
-	if (node === null || node.type !== "Identifier") {
-		return null;
-	}
-	const name = field(node, "name");
-	return typeof name === "string" ? name : null;
-}
 
 /**
  * The names that a declaration's pattern binds, such as `b` and `c` in
@@ -135,6 +89,17 @@ type DesignatedCall = "release" | "fill";
 /** One of the three `checkedOut` statements of the `finally` block, which the file's header lists. */
 type CheckoutStatement = "first check" | "put-back" | "clear";
 
+/**
+ * The statements of an `if` branch or a loop body. A bundler drops the braces
+ * around a single statement, which runs the same code.
+ */
+function bodyStatements(node: Node | null): readonly Node[] {
+	if (node === null) {
+		return [];
+	}
+	return node.type === "BlockStatement" ? children(node, "body") : [node];
+}
+
 /** The right-hand side of `statement` if it is `target = value;`, or `null`. */
 function assignedValue(statement: Node | undefined, target: string): Node | null {
 	const expression =
@@ -164,8 +129,7 @@ function comparesHeld(node: Node | null, operator: string, held: string): boolea
 /** Which of the three `checkedOut` statements `node` is, for the call's instance `held`, or `null`. */
 function checkoutStatement(node: Node, held: string | null): CheckoutStatement | null {
 	const test = child(node, "test");
-	const consequent = child(node, "consequent");
-	const body = consequent?.type === "BlockStatement" ? children(consequent, "body") : [];
+	const body = bodyStatements(child(node, "consequent"));
 	const [only] = body;
 	if (held === null || child(node, "alternate") !== null || body.length !== 1) {
 		return null;
@@ -431,8 +395,7 @@ class Checker {
 		const start = declarator === undefined ? null : child(declarator, "init");
 		const test = child(node, "test");
 		const update = child(node, "update");
-		const body = child(node, "body");
-		const stores = body?.type === "BlockStatement" ? children(body, "body") : [];
+		const stores = bodyStatements(child(node, "body"));
 		const isStore = (statement: Node): boolean => {
 			const store = child(statement, "expression");
 			const target = store === null ? null : child(store, "left");
@@ -502,11 +465,7 @@ const designatedCalls: readonly (readonly DesignatedCall[])[] = [
  * and returns one message per broken rule, each with the file and the line.
  */
 export function coreStructureFailures(file: string, source: string): readonly string[] {
-	const program: unknown = parseAst(source, { lang: "ts" }, file);
-	if (!isNode(program)) {
-		return [`${file}: the parser returned no program.`];
-	}
-	const cores = [...walk(program)].filter(
+	const cores = [...walk(parseProgram(file, source))].filter(
 		(node) => node.type === "FunctionDeclaration" && nameOf(child(node, "id")) === coreFunction,
 	);
 	const [core] = cores;
