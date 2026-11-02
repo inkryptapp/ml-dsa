@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { z } from "zod";
@@ -13,6 +13,7 @@ import {
 	readCtMatrix,
 } from "../../../scripts/ct-matrix.ts";
 import { submodulePath } from "../../../scripts/pin-guard.ts";
+import { manifestHashes } from "../../../scripts/vector-manifest.ts";
 import { buildScriptFailures, derivationFailures } from "./build-lint.ts";
 import { expectedCounts } from "./expected-counts.ts";
 import { buildScript, ctActionFile, ctWorkflowFile, moduleFile } from "./files.ts";
@@ -46,7 +47,16 @@ import {
 	type BuildResult,
 	type System,
 } from "./rebuild.ts";
+import { attwFailures, copiedFiles, packageFailures, tarballFilesFile } from "./package-checks.ts";
 import { snapshotFailures } from "./snapshot.ts";
+import {
+	compareTarballs,
+	packedTarballName,
+	readTarball,
+	TarballFormatError,
+	type PackedTarball,
+	type TarballFiles,
+} from "./tarball.ts";
 import {
 	featureFolder,
 	featureProbeArguments,
@@ -71,6 +81,10 @@ const includeFolder = "packages/ml-dsa/wasm/include";
 const stackMarginTest = "packages/ml-dsa/test/stack-margin.test.ts";
 const vectorTest = "packages/ml-dsa/test/vectors.test.ts";
 const featureScript = "packages/ml-dsa/check/features.sh";
+const packScript = "packages/ml-dsa/check/pack.sh";
+
+/** The folder that the package build writes each system's tarball to. CI uploads it. */
+const packedFolder = "packages/ml-dsa/packed";
 
 // The rebuild step has already evaluated the flake, whose rules in
 // nix/lib.nix validate the file, so the checks read only the sizes that they
@@ -372,6 +386,138 @@ function hostPathStepFailures(native: System): readonly string[] {
 	];
 }
 
+/** The tarball that the package build packed on `system`, relative to the repo root. */
+function packedTarball(system: System): string {
+	return `${packedFolder}/${packedTarballName(system)}`;
+}
+
+/**
+ * The folder inside the container that the pack on `system` works in. Each
+ * system gets its own, so a build that embeds the folder's path gives two
+ * different tarballs, and the path scan finds the path.
+ */
+function packFolder(system: System): string {
+	return `/tmp/ml-dsa-pack-${system}`;
+}
+
+/**
+ * The repo files that the install and the pack may read: every file that git
+ * tracks, as the working tree holds it, outside the vector folder and the
+ * submodule, and upstream's license. As with the flake, a new file packs only
+ * once git tracks it.
+ */
+function packInputs(): readonly string[] {
+	const listed = spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" });
+	if (listed.error !== undefined) {
+		throw listed.error;
+	}
+	if (listed.status !== 0) {
+		throw new CommandFailed(`\`git ls-files\` failed: ${listed.stderr}`);
+	}
+	const tracked = listed.stdout
+		.split("\0")
+		.filter(
+			(file) =>
+				file !== "" &&
+				!file.startsWith("vectors/") &&
+				file !== submodulePath &&
+				existsSync(join(root, file)),
+		);
+	return [...tracked, `${submodulePath}/LICENSE`];
+}
+
+/** Packs the tarball inside the container on `build`'s system, and writes it to the packed folder. */
+function packOn(build: Build): PackedTarball {
+	const emulationFlags = build.emulated ? ["--option", "extra-platforms", build.system] : [];
+	const bytes = nix([
+		"shell",
+		...emulationFlags,
+		installable(build.system, "nodejs"),
+		installable(build.system, "pnpm"),
+		"--command",
+		"bash",
+		packScript,
+		packFolder(build.system),
+		...packInputs(),
+	]);
+	writeFileSync(join(root, packedTarball(build.system)), bytes);
+	console.log(
+		`  ${build.system} tarball (${build.emulated ? "emulated" : "native"}): ${sha256(bytes)}`,
+	);
+	return { system: build.system, bytes };
+}
+
+/**
+ * Packs the tarball on each planned system and compares the tarballs. With
+ * `nativeOnly`, it packs only the native one, and CI compares the tarballs of
+ * its two runners in a later job.
+ */
+function packageBuildFailures(native: System, nativeOnly: boolean): readonly string[] {
+	rmSync(join(root, packedFolder), { recursive: true, force: true });
+	mkdirSync(join(root, packedFolder), { recursive: true });
+	const [first, second] = plannedBuilds(native, nativeOnly).map(packOn);
+	if (first === undefined || second === undefined) {
+		return [];
+	}
+	const comparison = compareTarballs(first, second);
+	if (!comparison.passed) {
+		return comparison.failures;
+	}
+	console.log(`  ${comparison.summary}`);
+	return [];
+}
+
+/** The store path that `nix build` prints for `target`. */
+function storePath(target: string): string {
+	const path = nix(["build", "--no-link", "--print-out-paths", target]).toString("utf8").trim();
+	if (!/^\/nix\/store\/[0-9a-z]{32}-[^/\n]+$/.test(path)) {
+		throw new CommandFailed(
+			`\`nix build\` printed ${JSON.stringify(path)} instead of one store path.`,
+		);
+	}
+	return path;
+}
+
+/** Runs the package checks on the native tarball, which the package build wrote. */
+function packageCheckFailures(native: System): readonly string[] {
+	const tarball = packedTarball(native);
+	const bytes = readFileSync(join(root, tarball));
+	let files: TarballFiles | undefined = undefined;
+	try {
+		files = readTarball(bytes);
+	} catch (error) {
+		if (error instanceof TarballFormatError) {
+			return [`The check can't read ${tarball}. ${error.message}`];
+		}
+		throw error;
+	}
+	const roots = [
+		{ name: "the pack's folder", path: packFolder(native) },
+		{ name: "the repo", path: root },
+		{ name: "the pack's Node.js", path: storePath(installable(native, "nodejs")) },
+		{ name: "the pack's pnpm", path: storePath(installable(native, "pnpm")) },
+	];
+	const patterns = scanPatterns(roots);
+	const repoFiles = new Map(
+		[...copiedFiles.values()].map((file) => {
+			const path = join(root, file);
+			return [file, existsSync(path) ? readFileSync(path) : undefined] as const;
+		}),
+	);
+	return [
+		...negativeFixtureFailures(patterns),
+		...packageFailures({
+			files,
+			tarballBytes: bytes.length,
+			committedList: readIfPresent(tarballFilesFile),
+			repoFiles,
+			vectorHashes: manifestHashes(root),
+			patterns,
+		}),
+		...attwFailures(join(root, "node_modules/.bin/attw"), join(root, tarball)),
+	];
+}
+
 /** Runs one test file and fails when a test in it fails. */
 function testFileFailures(file: string): readonly string[] {
 	// When Vitest detects a coding agent, such as through `AI_AGENT`, its
@@ -405,6 +551,11 @@ export function wasmSteps(options: { readonly nativeOnly: boolean }): readonly S
 		{ name: "instruction counts", run: () => onNativeSystem(instructionCountStepFailures) },
 		{ name: "target features", run: () => onNativeSystem(targetFeatureStepFailures) },
 		{ name: "host paths", run: () => onNativeSystem(hostPathStepFailures) },
+		{
+			name: "package build",
+			run: () => onNativeSystem((native) => packageBuildFailures(native, options.nativeOnly)),
+		},
+		{ name: "package checks", run: () => onNativeSystem(packageCheckFailures) },
 		// The stack-margin test prints the wasm stack peak of every operation.
 		{ name: "stack margin", run: () => testFileFailures(stackMarginTest) },
 		// The vector test routes the ACVP and Wycheproof cases through the
