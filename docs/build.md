@@ -46,8 +46,20 @@ The command stops at the first step that fails and says what failed and why. It 
 
     The `-g` module must have a `.debug_*` section, and its debug info must name a path under the name of each prefix map in `build.sh`, such as `mldsa-native`. First, the scan must find each pattern in a negative fixture that holds them all. Nix already fails a build of either derivation whose output names a store path that the build reads, because both set `allowedReferences = [ ]`, so a missing map for a store root fails the build before the scan runs. The scan catches a path that a change to the build leaks by accident. It reads plain bytes, so review catches a path that a script encodes on purpose.
 
-12. The stack margin. `packages/ml-dsa/test/stack-margin.test.ts` runs keygen, sign, and verify for each parameter set with fixed inputs, once per byte pattern. Before each export call, the test fills the wasm stack with the pattern, and after the call it finds the deepest byte that changed. Each operation's deepest call must reach more than 0 bytes and at most 75% of the wasm stack, and it must equal the operation's peak in the test's `pinnedPeaks`. The step prints each operation's peak.
-13. The vectors. `packages/ml-dsa/test/vectors.test.ts` runs the ACVP and Wycheproof cases against the committed module. The routing table in `packages/ml-dsa/test/routing-table.ts` sends each case through the public API when the API can express it, and through the test-only entry point when it can't. The HashML-DSA cases and the Wycheproof sign_noseed cases with a bad secret key don't run, because the package has no HashML-DSA and never imports a secret key. The step prints the count per path and per row, with the routing table's version, and the cases per segment from `packages/ml-dsa/test/segment-table.ts`. It fails when any of these holds:
+12. The package build. The command packs the npm tarball inside the build container, once for each system that the wasm module rebuilds step built. It runs `packages/ml-dsa/check/pack.sh` with the flake's `nodejs` and `pnpm` packages through `scripts/nix shell`. The script copies each file that git tracks, outside `vectors/` and the submodule, and upstream's `LICENSE` into a folder inside the container. There it runs `pnpm install --frozen-lockfile --ignore-scripts`, `vp pack`, and `npm pack`. pnpm checks each package that it downloads against its integrity hash in `pnpm-lock.yaml`. As with the flake, a new file packs only after `git add`. The command writes each tarball to `packages/ml-dsa/packed/` and prints its SHA-256. The tarballs must be byte-identical, or hold identical archives when only their gzip layer differs.
+13. The package checks. The step reads the native tarball and fails unless all of these hold:
+    - The tarball's files equal the list in `packages/ml-dsa/check/tarball-files.txt`, and the tarball is at most 100,000 bytes.
+    - `package.json`, `README.md`, `LICENSE`, `LICENSE-mldsa-native`, and `dist/mldsa.wasm` equal their sources: `packages/ml-dsa/package.json`, `packages/ml-dsa/README.md`, the root `LICENSE`, `vendor/mldsa-native/LICENSE`, and the committed module.
+    - `package.json` sets `"type": "module"`, `"engines": { "node": ">=22" }`, the exports map of `expectedExports`, in its key order, the `mldsaNative` field, and `repository.url` as `git+https://github.com/inkryptapp/ml-dsa.git`. It has no `main`, `module`, `types`, `typings`, or `browser` field, and no field of runtime dependencies. `expectedExports` is in `packages/ml-dsa/check/package-checks.ts`.
+    - No file is a vector file that `vectors/manifest.json` lists, or the test-only entry point.
+    - Each import in the shipped JavaScript and declarations names another file of the tarball by a relative path, without import attributes, and no import names a `.json` file. So the package has zero runtime dependencies, and no shipped file imports noble.
+    - `dist/workerd.js` imports only `./mldsa.wasm`. `dist/index.js` passes the bytes of `dist/mldsa.wasm`, as base64 text, to its one `atob` call.
+    - The structural check of the core finds the core function exactly once in each entry file, `dist/index.js` and `dist/workerd.js`, and applies its rules there.
+    - The path scan of step 11 finds none of its patterns in the files under `dist/` or in the module that `dist/index.js` embeds. Here the roots are the pack's folder, the repo, and the store paths of the pack's Node.js and pnpm.
+    - attw, pinned in the root `package.json`, passes with `--profile esm-only` on the tarball.
+
+14. The stack margin. `packages/ml-dsa/test/stack-margin.test.ts` runs keygen, sign, and verify for each parameter set with fixed inputs, once per byte pattern. Before each export call, the test fills the wasm stack with the pattern, and after the call it finds the deepest byte that changed. Each operation's deepest call must reach more than 0 bytes and at most 75% of the wasm stack, and it must equal the operation's peak in the test's `pinnedPeaks`. The step prints each operation's peak.
+15. The vectors. `packages/ml-dsa/test/vectors.test.ts` runs the ACVP and Wycheproof cases against the committed module. The routing table in `packages/ml-dsa/test/routing-table.ts` sends each case through the public API when the API can express it, and through the test-only entry point when it can't. The HashML-DSA cases and the Wycheproof sign_noseed cases with a bad secret key don't run, because the package has no HashML-DSA and never imports a secret key. The step prints the count per path and per row, with the routing table's version, and the cases per segment from `packages/ml-dsa/test/segment-table.ts`. It fails when any of these holds:
     - A vector file has no reader, lacks the other file of its ACVP pair, isn't valid UTF-8 JSON, lists a case id twice, or disagrees with its schema, its name, its folder, its header, or the other file of its pair.
     - A case matches no row or several rows, or has the result `acceptable` and its row doesn't handle that result.
     - A case's fields disagree with what its flags, its group, or its file's format imply.
@@ -58,11 +70,11 @@ The command stops at the first step that fails and says what failed and why. It 
 
 The pin guard reads the tags that the submodule has fetched. To update them to upstream's, run `git -C vendor/mldsa-native fetch --force --prune --prune-tags origin`. A plain `git fetch --tags` keeps a tag that upstream deleted and refuses to move a tag that upstream moved. CI checks out a fresh clone, so it always sees upstream's tags.
 
-On an arm64 host, the command also builds the module for x86_64-linux under emulation and prints that build's hash. Arm64 Nix runs natively in the container. The command passes `--option extra-platforms x86_64-linux` on that build only, so Nix hands the x86_64 build steps to the container host's QEMU handler. On macOS, the Podman machine registers that handler. The first emulated build downloads the x86_64 toolchain from `cache.nixos.org` and takes a few minutes.
+On an arm64 host, the command also builds the module and packs the tarball for x86_64-linux under emulation, and prints the hash of each. Arm64 Nix runs natively in the container. The command passes `--option extra-platforms x86_64-linux` on that build only, so Nix hands the x86_64 build steps to the container host's QEMU handler. On macOS, the Podman machine registers that handler. The first emulated build downloads the x86_64 toolchain from `cache.nixos.org` and takes a few minutes.
 
 To build only the host's own system, as CI does, run `scripts/check --native-only`.
 
-CI runs `scripts/check --native-only` natively on `ubuntu-24.04` and `ubuntu-24.04-arm`, from a clean checkout with no `/nix` cache. CI never writes, commits, or proposes the module.
+CI runs `scripts/check --native-only` natively on `ubuntu-24.04` and `ubuntu-24.04-arm`, from a clean checkout with no `/nix` cache. CI never writes, commits, or proposes the module. Each runner uploads its tarball, and a later job compares the two tarballs with `packages/ml-dsa/check/compare-tarballs.ts`, which runs the comparison of the package build step.
 
 ## Update the committed module
 
@@ -75,7 +87,7 @@ To change the module, such as after a pin bump or a change to `build.sh`, follow
 
 ## Update the expected values
 
-A pin bump, a new clang, or a change to `build.sh` or the config header can change what the module interface, upstream headers, instruction counts, target features, and stack margin steps compare. A failed comparison with a committed file names each line that the file lacks or has, or says that the lines come in another order. To accept a change, follow these steps:
+A pin bump, a new clang, or a change to `build.sh` or the config header can change what the module interface, upstream headers, instruction counts, target features, and stack margin steps compare. A change to the package's files can change what the package checks compare. A failed comparison with a committed file names each line that the file lacks or has, or says that the lines come in another order. To accept a change, follow these steps:
 
 1. Review each difference. For a changed C prototype, read the function's new semantics in upstream's source, not only its new signature.
 2. Edit `module-exports.txt`, `prototypes.txt`, or `config-diff.txt` in `packages/ml-dsa/check/` until it holds exactly the lines that the step gives. For a moved stack peak, edit `pinnedPeaks` in `packages/ml-dsa/test/stack-margin.test.ts`.
@@ -83,7 +95,8 @@ A pin bump, a new clang, or a change to `build.sh` or the config header can chan
 4. For a changed instruction count, read the function's source at the new pin and find what each counted instruction tests. Then change the count and its reason together in `packages/ml-dsa/check/expected-counts.ts`. A failed site check names a cited line that no longer holds its declassification. Find the line where upstream now declassifies the value, and update the site.
 5. For a feature that the pinned `llc` newly lists, add a minimal fixture to `packages/ml-dsa/check/features/` and a row to the table in `packages/ml-dsa/check/target-features.ts`. A row for an unknown feature lapses when wasm-tools learns the feature, and the step then fails until the row gets its wasm-tools name.
 6. If the config diff changed, update record 0002 in `docs/adr/` and the list in `packages/ml-dsa/wasm/include/mldsa_wasm_config.h`.
-7. Run `scripts/check` again.
+7. For a change to the tarball's files, edit `packages/ml-dsa/check/tarball-files.txt` until it holds exactly the paths that the step gives. When the root `package.json`'s `packageManager` field names another pnpm version, add that version's two hashes to `nix/pnpm.nix`.
+8. Run `scripts/check` again.
 
 ## Build without the pinned image or the cached clang
 

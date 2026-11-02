@@ -29,6 +29,7 @@
 
       nixpkgs = builtins.fetchTree (lib.upstreamNixpkgs upstreamLock);
       sizes = lib.sizes (builtins.fromJSON (builtins.readFile ./packages/ml-dsa/wasm/sizes.json));
+      pnpmVersion = lib.pnpmVersion (builtins.fromJSON (builtins.readFile ./package.json)).packageManager or null;
 
       # Fixed names keep the store paths the same after a `git mv`.
       vendoredSource = builtins.path {
@@ -109,6 +110,14 @@
               lld = llvm.lld;
               llvm = llvm.llvm;
               wasm-tools = pkgs.wasm-tools;
+              # The Node.js and the pnpm that pack the npm tarball inside the
+              # container. The dev tools need a Node.js in the root
+              # package.json's devEngines range.
+              nodejs = pkgs.nodejs_24;
+              pnpm = import ./nix/pnpm.nix {
+                inherit pkgs system;
+                version = pnpmVersion;
+              };
             };
           }
         ) systems

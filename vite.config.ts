@@ -1,8 +1,7 @@
-import { readFile } from "node:fs/promises";
-
 import { defineConfig } from "vite-plus";
 
 import { lintFixturesEnvVar, lintFixturesFolder, lintFixturesOn } from "./lint-fixtures.js";
+import { wasmBase64 } from "./packages/ml-dsa/wasm-imports.ts";
 
 const vendoredSource = "vendor/mldsa-native";
 
@@ -16,21 +15,9 @@ const ignoredLintFixtures =
 const bufferDetachingMembers = ["grow", "toResizableBuffer", "toFixedLengthBuffer"];
 
 export default defineConfig({
-	plugins: [
-		{
-			// The default entry imports the wasm module as base64 text. Without this
-			// plugin, the test runner doesn't give a `.wasm` import that text.
-			name: "ml-dsa:wasm-base64",
-			enforce: "pre",
-			async load(id) {
-				if (!id.endsWith(".wasm")) {
-					return null;
-				}
-				const base64 = (await readFile(id)).toString("base64");
-				return `export default ${JSON.stringify(base64)};`;
-			},
-		},
-	],
+	// The default entry imports the wasm module as base64 text, which the test
+	// runner gives a `.wasm` import only through this plugin.
+	plugins: [wasmBase64()],
 	lint: {
 		ignorePatterns: [vendoredSource, ...ignoredLintFixtures],
 		options: {

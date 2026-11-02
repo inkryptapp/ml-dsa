@@ -9,5 +9,10 @@
 		"allowImportingTsExtensions": true,
 		"erasableSyntaxOnly": true
 	},
-	"include": ["vite.config.ts", "scripts"]
+	"include": [
+		"vite.config.ts",
+		"scripts",
+		"packages/ml-dsa/vite.config.ts",
+		"packages/ml-dsa/wasm-imports.ts"
+	]
 }

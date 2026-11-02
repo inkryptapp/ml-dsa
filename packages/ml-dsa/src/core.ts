@@ -191,8 +191,9 @@ export function createInstance(): Instance {
 }
 
 /**
- * Takes the compiled module and creates the first instance. The default entry
- * calls it once while it evaluates, so a failure here fails the import.
+ * Takes the compiled module and creates the first instance. Each entry, the
+ * default one and the `workerd` one, calls it once while it evaluates, so a
+ * failure here fails the import.
  */
 export function initialize(module: WebAssembly.Module): void {
 	compiled = module;

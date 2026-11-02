@@ -1,8 +1,51 @@
 {
 	"name": "ml-dsa",
+	"version": "0.0.0",
+	"description": "ML-DSA signatures from FIPS 204 for browsers, Web Workers, Cloudflare Workers, and Node.js, compiled from mldsa-native to one WebAssembly module",
+	"keywords": [
+		"fips-204",
+		"ml-dsa",
+		"mldsa-native",
+		"post-quantum",
+		"signature",
+		"webassembly"
+	],
+	"homepage": "https://github.com/inkryptapp/ml-dsa/tree/main/packages/ml-dsa#readme",
+	"bugs": {
+		"url": "https://github.com/inkryptapp/ml-dsa/issues"
+	},
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/inkryptapp/ml-dsa.git",
+		"directory": "packages/ml-dsa"
+	},
+	"files": [
+		"dist",
+		"LICENSE-mldsa-native"
+	],
 	"type": "module",
+	"exports": {
+		".": {
+			"workerd": {
+				"types": "./dist/index.d.ts",
+				"import": "./dist/workerd.js"
+			},
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			}
+		},
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"build": "vp pack"
+	},
 	"devDependencies": {
 		"@noble/post-quantum": "0.7.1"
+	},
+	"engines": {
+		"node": ">=22"
 	},
 	"mldsaNative": {
 		"tag": "v2.0.0",

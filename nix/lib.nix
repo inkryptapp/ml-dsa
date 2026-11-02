@@ -36,6 +36,22 @@
           ;
       };
 
+  # Returns the pnpm version that the root package.json's `packageManager`
+  # field names, which must be `pnpm@X.Y.Z` with no hash suffix.
+  pnpmVersion =
+    packageManager:
+    let
+      match =
+        if builtins.isString packageManager then
+          builtins.match "pnpm@([0-9]+\\.[0-9]+\\.[0-9]+)" packageManager
+        else
+          null;
+    in
+    if match == null then
+      throw "package.json: the packageManager field must be pnpm@X.Y.Z."
+    else
+      builtins.head match;
+
   # Returns the parsed sizes JSON when it holds exactly the three sizes, each a
   # positive integer. The linear memory must be whole 64 KiB wasm pages. The
   # wasm stack must be a multiple of 16, as wasm-ld requires, and smaller than
